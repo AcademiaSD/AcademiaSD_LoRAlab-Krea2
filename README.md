@@ -1,1 +1,1 @@
-![AcademiaSD_LoRAlab-Krea2](assets/portadajpg)
+![AcademiaSD_LoRAlab-Krea2](assets/portada.jpg)
