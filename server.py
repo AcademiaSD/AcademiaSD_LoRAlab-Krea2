@@ -17,8 +17,7 @@ import string
 import logging
 import webbrowser
 from pathlib import Path
-import logging
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
 
 # =============================================================================
 # DEPENDENCIAS / DEPENDENCIES
@@ -77,6 +76,7 @@ LOGO_FILE = ASSETS_DIR / "logo.png" if (ASSETS_DIR / "logo.png").exists() else B
 
 PRECACHE_CONFIG = BASE_DIR / "pre_cache_settings.json"
 TRAIN_CONFIG = BASE_DIR / "train_settings.json"
+HF_TOKEN_CONFIG = BASE_DIR / "HF_token.json"
 
 PRECACHE_SCRIPT = BASE_DIR / "1_pre_cache_krea2.py"
 TRAIN_SCRIPT = BASE_DIR / "2_train_lora_krea2.py"
@@ -172,6 +172,27 @@ def get_status():
             active_script = None
             return {"running": False, "script": None, "pid": None}
         return {"running": True, "script": active_script, "pid": active_process.pid}
+
+
+# =============================================================================
+# HUGGINGFACE TOKEN API
+# =============================================================================
+
+@app.route("/api/hf-token", methods=["GET"])
+def get_hf_token():
+    data = read_json_file(HF_TOKEN_CONFIG, {"token": ""})
+    return jsonify({"token": data.get("token", "")})
+
+
+@app.route("/api/save-hf-token", methods=["POST"])
+def save_hf_token():
+    try:
+        req = request.get_json(force=True) or {}
+        token = req.get("token", "").strip()
+        write_json_file(HF_TOKEN_CONFIG, {"token": token})
+        return jsonify({"status": "ok", "file": HF_TOKEN_CONFIG.name})
+    except Exception as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
 
 
 # =============================================================================

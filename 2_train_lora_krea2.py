@@ -13,6 +13,7 @@ import random
 import json
 import signal
 import sys
+import logging
 from collections import defaultdict
 
 import numpy as np
@@ -37,7 +38,7 @@ DEFAULTS = {
     "model_id": "Krea-2-NF4",
     "cache_dir": "./cached_data_krea2",
     "output_dir": "./krea2_lora_output",
-    "total_steps": 1200,
+    "total_steps": 500,
     "batch_size": 1,
     "grad_accum_steps": 4,
     "lr": 1e-4,
@@ -122,6 +123,50 @@ def free_vram():
     torch.cuda.empty_cache()
 
 
+def get_hf_token():
+    if os.path.exists("HF_token.json"):
+        try:
+            with open("HF_token.json", "r", encoding="utf-8") as f:
+                token_data = json.load(f)
+                token = token_data.get("token", "").strip()
+                if token:
+                    print("✓ Using HF Token / Usando token de HF")
+                    return token
+        except Exception:
+            pass
+    return None
+
+
+def enable_hf_file_progress():
+    """ Fuerza a tqdm y huggingface_hub a mostrar progreso individual de MBs por archivo """
+    try:
+        import tqdm
+        import tqdm.auto
+        import tqdm.std
+
+        def patch_tqdm(cls):
+            orig_init = cls.__init__
+            def new_init(self, *args, **kwargs):
+                kwargs['disable'] = False
+                kwargs['mininterval'] = 0.5
+                orig_init(self, *args, **kwargs)
+            cls.__init__ = new_init
+
+        patch_tqdm(tqdm.std.tqdm)
+        patch_tqdm(tqdm.auto.tqdm)
+        if hasattr(tqdm, 'tqdm'):
+            patch_tqdm(tqdm.tqdm)
+
+        from huggingface_hub.utils import enable_progress_bars
+        enable_progress_bars()
+        logging.getLogger("huggingface_hub").setLevel(logging.INFO)
+    except Exception:
+        pass
+
+    os.environ["TQDM_DISABLE"] = "0"
+    os.environ["TQDM_MININTERVAL"] = "0.5"
+
+
 def ensure_model_downloaded(local_path, repo_id):
     if os.path.exists(local_path) and os.path.isdir(local_path):
         has_content = any(
@@ -136,6 +181,8 @@ def ensure_model_downloaded(local_path, repo_id):
     print(f"  Downloading from Hugging Face / Descargando desde Hugging Face: {repo_id}")
     print(f"  This may take several minutes / Esto puede tardar varios minutos...")
 
+    enable_hf_file_progress()
+
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
@@ -144,11 +191,15 @@ def ensure_model_downloaded(local_path, repo_id):
             "  pip install huggingface_hub"
         )
 
+    hf_token = get_hf_token()
+
     downloaded_path = snapshot_download(
         repo_id=repo_id,
         local_dir=local_path,
         local_dir_use_symlinks=False,
         resume_download=True,
+        token=hf_token,
+        max_workers=2,
     )
 
     print(f"[OK] Model downloaded to / Modelo descargado en: {downloaded_path}")
@@ -175,6 +226,9 @@ def sample_sigma(batch_size, image_seq_len, device, shift_cfg):
 
 def pack_latents(x):
     B, C, H, W = x.shape
+    H = H - (H % 2)
+    W = W - (W % 2)
+    x = x[:, :, :H, :W]
     x = x.view(B, C, H // 2, 2, W // 2, 2).permute(0, 2, 4, 1, 3, 5)
     return x.reshape(B, (H // 2) * (W // 2), C * 4)
 

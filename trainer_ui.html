@@ -141,7 +141,7 @@
     <header>
         <!-- Banner de la cabecera -->
         <div class="banner-container">
-            <img src="/assets/banner.png" alt="AcademiaSD Krea2 LoRAlab" class="banner-img" onerror="this.src='/assets/logo.jpg'; this.onerror=null;">
+            <img src="/assets/logo.jpg" alt="AcademiaSD Krea2 LoRAlab" class="banner-img" onerror="this.src='/assets/logo.jpg'; this.onerror=null;">
         </div>
 
         <div class="header-content">
@@ -185,6 +185,18 @@
         <!-- Sidebar: Settings -->
         <div class="sidebar">
             
+            <!-- 0. Hugging Face Token Panel (Opcional) -->
+            <div class="panel">
+                <div class="panel-title">Hugging Face Token (Optional / Opcional)</div>
+                <div class="form-group" style="margin-bottom: 8px;">
+                    <label>HF Token / Token de HF:</label>
+                    <input type="password" id="hf_token" value="" placeholder="hf_..." autocomplete="off">
+                </div>
+                <button type="button" class="btn btn-secondary btn-full" onclick="saveHfToken()">
+                    Save HF Token / Guardar HF Token
+                </button>
+            </div>
+
             <!-- 1. Pre-Cache Settings Panel -->
             <div class="panel">
                 <div class="panel-title">1. Pre-Cache Settings / Config. Pre-Caché</div>
@@ -488,6 +500,35 @@
         setInterval(updateSystemStats, 3000);
         updateSystemStats();
 
+        async function loadHfToken() {
+            try {
+                const res = await fetch('/api/hf-token');
+                const data = await res.json();
+                if (data.token) {
+                    document.getElementById('hf_token').value = data.token;
+                }
+            } catch (e) {}
+        }
+
+        async function saveHfToken() {
+            const token = document.getElementById('hf_token').value.trim();
+            try {
+                const res = await fetch('/api/save-hf-token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: token })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    alert('✓ HF Token saved / Token de HF guardado!');
+                } else {
+                    alert(`[!] Error: ${data.error}`);
+                }
+            } catch (e) {
+                alert(`[!] Network Error / Error de red: ${e}`);
+            }
+        }
+
         function updateProjectPaths() {
             const proj = document.getElementById('project_name').value.trim();
             const cacheDir = proj ? `./cached_data_krea2_${proj}` : './cached_data_krea2';
@@ -514,6 +555,7 @@
 
         async function loadSettings() {
             try {
+                await loadHfToken();
                 const res = await fetch('/api/settings');
                 const data = await res.json();
                 if (data.pre_cache) {

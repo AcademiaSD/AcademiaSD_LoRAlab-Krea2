@@ -14,6 +14,7 @@ import torch
 import torchvision.transforms.functional as F_vision
 from PIL import Image
 from diffusers import DiffusionPipeline
+import logging
 import sys
 
 try:
@@ -87,6 +88,50 @@ def free_vram(*tensors):
     torch.cuda.empty_cache()
 
 
+def get_hf_token():
+    if os.path.exists("HF_token.json"):
+        try:
+            with open("HF_token.json", "r", encoding="utf-8") as f:
+                token_data = json.load(f)
+                token = token_data.get("token", "").strip()
+                if token:
+                    print("✓ Using HF Token / Usando token de HF")
+                    return token
+        except Exception:
+            pass
+    return None
+
+
+def enable_hf_file_progress():
+    """ Fuerza a tqdm y huggingface_hub a mostrar progreso individual de MBs por archivo """
+    try:
+        import tqdm
+        import tqdm.auto
+        import tqdm.std
+
+        def patch_tqdm(cls):
+            orig_init = cls.__init__
+            def new_init(self, *args, **kwargs):
+                kwargs['disable'] = False
+                kwargs['mininterval'] = 0.5
+                orig_init(self, *args, **kwargs)
+            cls.__init__ = new_init
+
+        patch_tqdm(tqdm.std.tqdm)
+        patch_tqdm(tqdm.auto.tqdm)
+        if hasattr(tqdm, 'tqdm'):
+            patch_tqdm(tqdm.tqdm)
+
+        from huggingface_hub.utils import enable_progress_bars
+        enable_progress_bars()
+        logging.getLogger("huggingface_hub").setLevel(logging.INFO)
+    except Exception:
+        pass
+
+    os.environ["TQDM_DISABLE"] = "0"
+    os.environ["TQDM_MININTERVAL"] = "0.5"
+
+
 def bucket_size(w: int, h: int):
     """(ancho, alto) múltiplos de MULTIPLE, área ≈ TARGET_AREA, conservando el aspecto."""
     ar = w / h
@@ -115,6 +160,8 @@ def ensure_model_downloaded(local_path, repo_id):
     print(f"  Downloading from Hugging Face / Descargando desde Hugging Face: {repo_id}")
     print(f"  This may take several minutes / Esto puede tardar varios minutos...")
 
+    enable_hf_file_progress()
+
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
@@ -123,11 +170,15 @@ def ensure_model_downloaded(local_path, repo_id):
             "  pip install huggingface_hub"
         )
 
+    hf_token = get_hf_token()
+
     downloaded_path = snapshot_download(
         repo_id=repo_id,
         local_dir=local_path,
         local_dir_use_symlinks=False,
         resume_download=True,
+        token=hf_token,
+        max_workers=2,
     )
     print(f"✓ Model downloaded to / Modelo descargado en: {downloaded_path}")
     return downloaded_path
