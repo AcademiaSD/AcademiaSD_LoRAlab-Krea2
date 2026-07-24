@@ -88,6 +88,9 @@
         .console-container { display: flex; flex-direction: column; gap: 20px; }
         .terminal { background: #020617; border-radius: 8px; border: 1px solid var(--panel-border); padding: 15px; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85rem; color: #38bdf8; overflow-y: auto; white-space: pre-wrap; word-break: break-all; height: 320px; }
         .terminal-line { margin-bottom: 2px; line-height: 1.4; }
+        .terminal-line.term-success { color: #10b981; font-weight: bold; }
+        .terminal-line.term-warning { color: #f59e0b; font-weight: bold; }
+        .terminal-line.term-danger { color: #ef4444; font-weight: bold; }
 
         .ds-toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
         .ds-search { flex: 1; min-width: 150px; background: #0f172a; border: 1px solid var(--panel-border); color: #fff; padding: 6px 10px; border-radius: 6px; font-size: 0.8rem; }
@@ -470,6 +473,11 @@
         let browserPath = '';
         let currentBrowserTarget = 'dataset';
         let currentLoadTarget = 'precache';
+        
+        // Variables de control para detección de Pausa vs Finalización Completa
+        let userRequestedStop = false;
+        let lastExecutedStep = 0;
+        let totalTargetSteps = 0;
 
         async function updateSystemStats() {
             try {
@@ -754,13 +762,14 @@
             } catch (e) {}
         }
 
-        function appendTerminal(text, replace = false) {
+        function appendTerminal(text, replace = false, extraClass = '') {
             const term = document.getElementById('terminal');
             if (replace && term.lastElementChild) {
                 term.lastElementChild.innerText = text;
+                if (extraClass) term.lastElementChild.className = `terminal-line ${extraClass}`;
             } else {
                 const div = document.createElement('div');
-                div.className = 'terminal-line';
+                div.className = extraClass ? `terminal-line ${extraClass}` : 'terminal-line';
                 div.innerText = text;
                 term.appendChild(div);
             }
@@ -771,6 +780,11 @@
             document.getElementById('terminal').innerHTML = '';
             appendTerminal(`[SYSTEM] Launching / Iniciando ${scriptName}...`);
             setRunningState(true);
+
+            // Reiniciar flags de seguimiento de pasos y detención
+            userRequestedStop = false;
+            lastExecutedStep = 0;
+            totalTargetSteps = 0;
 
             try {
                 const response = await fetch('/api/run', {
@@ -797,15 +811,52 @@
                                 const msg = JSON.parse(line.slice(6));
                                 if (msg.type === 'output') {
                                     appendTerminal(msg.text, msg.replace);
+
+                                    // Extraer paso actual / paso objetivo si la línea es de progreso
+                                    const stepMatch = msg.text.match(/Step\/Paso\s+(\d+)\/(\d+)/i);
+                                    if (stepMatch) {
+                                        lastExecutedStep = parseInt(stepMatch[1]);
+                                        totalTargetSteps = parseInt(stepMatch[2]);
+                                    }
                                 } else if (msg.type === 'done') {
-                                    appendTerminal(`\n[SYSTEM] Finished with code / Finalizado con código: ${msg.code}`);
+                                    if (msg.code === 0) {
+                                        let successMsg = "";
+                                        let msgClass = 'term-success';
+
+                                        if (scriptName === 'train') {
+                                            const totalFormSteps = parseInt(document.getElementById('train_total_steps').value) || totalTargetSteps;
+                                            const isPausedEarly = userRequestedStop || (lastExecutedStep > 0 && lastExecutedStep < totalFormSteps);
+
+                                            if (isPausedEarly) {
+                                                successMsg = "\n[SYSTEM] ⏸ Training paused successfully! Checkpoint saved. / ¡Entrenamiento pausado con éxito! Checkpoint guardado.";
+                                                msgClass = 'term-warning';
+                                            } else {
+                                                successMsg = "\n[SYSTEM] ✓ LoRA Training completed successfully! / ¡Entrenamiento del LoRA finalizado con éxito!";
+                                                msgClass = 'term-success';
+                                            }
+                                        } else if (scriptName === 'precache') {
+                                            if (userRequestedStop) {
+                                                successMsg = "\n[SYSTEM] ⏸ Pre-Cache stopped by user. / Pre-Caché detenida por el usuario.";
+                                                msgClass = 'term-warning';
+                                            } else {
+                                                successMsg = "\n[SYSTEM] ✓ Pre-Cache completed successfully! / ¡Pre-Caché finalizada con éxito!";
+                                                msgClass = 'term-success';
+                                            }
+                                        } else {
+                                            successMsg = `\n[SYSTEM] ✓ Finished successfully with code / Finalizado con éxito con código: ${msg.code}`;
+                                        }
+
+                                        appendTerminal(successMsg, false, msgClass);
+                                    } else {
+                                        appendTerminal(`\n[SYSTEM] ⚠ Process finished with code / Proceso finalizado con código: ${msg.code}`, false, 'term-danger');
+                                    }
                                 }
                             } catch (e) {}
                         }
                     }
                 }
             } catch (err) {
-                appendTerminal(`\n[SYSTEM] Execution error / Error de ejecución: ${err}`);
+                appendTerminal(`\n[SYSTEM] Execution error / Error de ejecución: ${err}`, false, 'term-danger');
             } finally {
                 setRunningState(false);
                 loadPreviews();
@@ -824,6 +875,7 @@
         }
 
         async function stopScript() {
+            userRequestedStop = true;
             appendTerminal('\n[SYSTEM] Sending stop signal... / Enviando señal de detención...');
             await fetch('/api/stop', { method: 'POST' });
         }
@@ -848,10 +900,10 @@
                 const data = await res.json();
                 if (data.status === 'ok') {
                     alert(`✓ LoRA exported successfully / LoRA exportado con éxito:\n${data.filename}\n\nCopied from / Copiado desde: ${data.source}`);
-                    appendTerminal(`[SYSTEM] ✓ Export completed / Exportación completada: ${data.dest}`);
+                    appendTerminal(`[SYSTEM] ✓ Export completed / Exportación completada: ${data.dest}`, false, 'term-success');
                 } else {
                     alert(`[!] Export Error / Error de exportación: ${data.error}`);
-                    appendTerminal(`[SYSTEM] [!] Export failed: ${data.error}`);
+                    appendTerminal(`[SYSTEM] [!] Export failed: ${data.error}`, false, 'term-danger');
                 }
             } catch (e) {
                 alert(`[!] Network Error / Error de red: ${e}`);
