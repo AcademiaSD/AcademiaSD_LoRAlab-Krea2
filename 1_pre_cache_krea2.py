@@ -34,6 +34,7 @@ DEFAULTS = {
     "max_seq_len": 128,
     "project_name": "",
     "trigger_word": "",
+    "preview_custom_prompt": "",
 }
 
 # ── CARGAR CONFIGURACIÓN / LOAD CONFIG ──────────────────────────────────────
@@ -55,6 +56,7 @@ MULTIPLE     = cfg.get("multiple",     DEFAULTS["multiple"])
 MAX_SEQ_LEN  = cfg.get("max_seq_len",  DEFAULTS["max_seq_len"])
 TRIGGER_WORD = cfg.get("trigger_word", "")
 PROJECT_NAME = cfg.get("project_name", "").strip()
+PREVIEW_CUSTOM_PROMPT = cfg.get("preview_custom_prompt", "").strip()
 
 # Formato automático de carpeta de caché según nombre del proyecto
 if PROJECT_NAME:
@@ -62,7 +64,6 @@ if PROJECT_NAME:
 else:
     CACHE_DIR = cfg.get("cache_dir", DEFAULTS["cache_dir"])
 
-# Validar que Múltiplo sea únicamente 8, 16, 32 o 64 (Default: 16)
 if MULTIPLE not in (8, 16, 32, 64):
     print(f"⚠ Invalid Multiple {MULTIPLE}. Defaulting to 16 / Múltiplo inválido {MULTIPLE}. Usando 16 por defecto.")
     MULTIPLE = 16
@@ -103,7 +104,6 @@ def get_hf_token():
 
 
 def enable_hf_file_progress():
-    """ Fuerza a tqdm y huggingface_hub a mostrar progreso individual de MBs por archivo """
     try:
         import tqdm
         import tqdm.auto
@@ -133,7 +133,6 @@ def enable_hf_file_progress():
 
 
 def bucket_size(w: int, h: int):
-    """(ancho, alto) múltiplos de MULTIPLE, área ≈ TARGET_AREA, conservando el aspecto."""
     ar = w / h
     bh = math.sqrt(TARGET_AREA / ar)
     bw = ar * bh
@@ -158,17 +157,13 @@ def ensure_model_downloaded(local_path, repo_id):
 
     print(f"⚠ Local model not found at / No se encontró modelo local en: {local_path}")
     print(f"  Downloading from Hugging Face / Descargando desde Hugging Face: {repo_id}")
-    print(f"  This may take several minutes / Esto puede tardar varios minutos...")
 
     enable_hf_file_progress()
 
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        raise ImportError(
-            "huggingface_hub is required. Install with / Se requiere 'huggingface_hub'. Instálalo con:\n"
-            "  pip install huggingface_hub"
-        )
+        raise ImportError("huggingface_hub is required. Install with pip install huggingface_hub")
 
     hf_token = get_hf_token()
 
@@ -192,7 +187,7 @@ def preprocess_krea2():
     archivos_img = sorted(f for f in os.listdir(DATASET_PATH)
                           if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")))
     if not archivos_img:
-        print(f"[!] No images found in '{DATASET_PATH}'. Please add images and optional .txt files. / No hay imágenes en '{DATASET_PATH}'. Añade imágenes y sus .txt opcionales.")
+        print(f"[!] No images found in '{DATASET_PATH}'. Please add images.")
         return
 
     ensure_model_downloaded(
@@ -208,12 +203,11 @@ def preprocess_krea2():
     ).to("cuda")
 
     if not hasattr(pipe.vae.config, "latents_mean") or not hasattr(pipe.vae.config, "latents_std"):
-        raise RuntimeError("This VAE lacks latents_mean/latents_std configuration / Este VAE no tiene latents_mean/latents_std")
+        raise RuntimeError("This VAE lacks latents_mean/latents_std configuration")
 
     z_dim = pipe.vae.config.z_dim
     latents_mean = torch.tensor(pipe.vae.config.latents_mean, device="cuda", dtype=torch.float32).view(1, z_dim, 1, 1, 1)
     latents_std  = torch.tensor(pipe.vae.config.latents_std,  device="cuda", dtype=torch.float32).view(1, z_dim, 1, 1, 1)
-    print(f"VAE z_dim={z_dim} | Channel normalization OK / Normalización por canal OK")
 
     with torch.inference_mode():
         neg_embed, neg_mask = pipe.encode_prompt(prompt="", max_sequence_length=MAX_SEQ_LEN)
@@ -221,12 +215,22 @@ def preprocess_krea2():
         torch.save(neg_mask.cpu(),  os.path.join(CACHE_DIR, "_neg_mask.pt"))
         del neg_embed, neg_mask
 
+        # Pre-cache opcional de Prompt Manual si existe
+        if PREVIEW_CUSTOM_PROMPT:
+            c_prompt = PREVIEW_CUSTOM_PROMPT
+            if TRIGGER_WORD and TRIGGER_WORD.lower() not in c_prompt.lower():
+                c_prompt = f"{TRIGGER_WORD}, {c_prompt}".strip(", ")
+            print(f"[Custom Prompt Cache] Encoding: '{c_prompt}'...")
+            c_emb, c_msk = pipe.encode_prompt(prompt=c_prompt, max_sequence_length=MAX_SEQ_LEN)
+            torch.save(c_emb.cpu(), os.path.join(CACHE_DIR, "_custom_embed.pt"))
+            torch.save(c_msk.cpu(), os.path.join(CACHE_DIR, "_custom_mask.pt"))
+            del c_emb, c_msk
+
         for idx, archivo in enumerate(archivos_img, 1):
             nombre_base = os.path.splitext(archivo)[0]
             ruta_texto  = os.path.join(DATASET_PATH, f"{nombre_base}.txt")
             print(f"[{idx}/{len(archivos_img)}] Processing / Procesando: {archivo}")
 
-            # ── 1. IMAGEN → LATENTES (VAE) ──────────────────────────────────
             img = Image.open(os.path.join(DATASET_PATH, archivo)).convert("RGB")
             bw, bh = bucket_size(*img.size)
 
@@ -236,7 +240,7 @@ def preprocess_krea2():
             top  = (img.height - bh) // 2
             img  = img.crop((left, top, left + bw, top + bh))
 
-            img_tensor = F_vision.pil_to_tensor(img).unsqueeze(0).unsqueeze(2)  # [1,3,1,H,W]
+            img_tensor = F_vision.pil_to_tensor(img).unsqueeze(0).unsqueeze(2)
             img_tensor = (img_tensor.float() / 127.5) - 1.0
             img_tensor = img_tensor.to("cuda", dtype=torch.bfloat16)
 
@@ -247,7 +251,6 @@ def preprocess_krea2():
             torch.save(latent.cpu(), os.path.join(CACHE_DIR, f"{nombre_base}_latent.pt"))
             free_vram(img_tensor, z, latent)
 
-            # ── 2. TEXTO → EMBEDDINGS (+ MÁSCARA) ───────────────────────────
             prompt = ""
             if os.path.exists(ruta_texto):
                 with open(ruta_texto, "r", encoding="utf-8") as f:
@@ -261,7 +264,7 @@ def preprocess_krea2():
             torch.save(embeds.cpu(), os.path.join(CACHE_DIR, f"{nombre_base}_embed.pt"))
             torch.save(mask.cpu(),   os.path.join(CACHE_DIR, f"{nombre_base}_mask.pt"))
 
-            print(f"   [OK] {bw}x{bh} | Latents & Embeddings cached / Latentes y embeddings cacheados.")
+            print(f"   [OK] {bw}x{bh} | Latents & Embeddings cached.")
 
     free_vram(pipe)
     print("\n✓ Pre-caching finished! VRAM freed / ¡Pre-caché finalizado! VRAM liberada.")

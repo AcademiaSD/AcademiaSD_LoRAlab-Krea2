@@ -57,13 +57,19 @@
         .main-grid { display: grid; grid-template-columns: 440px 1fr; gap: 20px; flex: 1; }
         .sidebar { display: flex; flex-direction: column; gap: 20px; }
         .panel { background: var(--panel-bg); border-radius: 12px; border: 1px solid var(--panel-border); padding: 20px; }
-        .panel-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 15px; color: #f1f5f9; border-bottom: 1px solid var(--panel-border); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* Títulos desplegables / Collapsible Panels */
+        .panel-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 12px; color: #f1f5f9; border-bottom: 1px solid var(--panel-border); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; transition: color 0.15s; }
+        .panel-title:hover { color: #38bdf8; }
+        .panel.collapsed .panel-title { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+        .panel.collapsed .panel-body { display: none; }
+        .toggle-icon { font-size: 0.75rem; color: var(--text-muted); font-weight: bold; }
 
         .form-group { margin-bottom: 12px; }
         .form-group label { display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px; font-weight: 500; }
-        .form-group input, .form-group select { width: 100%; background: #0f172a; border: 1px solid var(--panel-border); color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; outline: none; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; background: #0f172a; border: 1px solid var(--panel-border); color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; outline: none; }
         .form-group input[readonly] { background: #1a2332; color: #94a3b8; cursor: not-allowed; border-style: dashed; }
-        .form-group input:focus, .form-group select:focus { border-color: var(--accent); }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent); }
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
         .btn { padding: 9px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; border: none; font-size: 0.88rem; transition: background 0.2s, transform 0.1s; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
@@ -114,11 +120,12 @@
         .img-filename-tag { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(2px); padding: 3px 6px; font-size: 0.68rem; color: #f8fafc; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid rgba(255,255,255,0.05); }
         .ds-card .caption { padding: 6px; font-size: 0.72rem; color: var(--text-muted); height: 40px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; background: #0f172a; }
 
-        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; max-height: 200px; overflow-y: auto; }
-        .preview-card { position: relative; border-radius: 6px; overflow: hidden; border: 1px solid var(--panel-border); cursor: pointer; background: #0f172a; transition: transform 0.15s, border-color 0.15s; }
+        /* Galería de Previsualizaciones (AMPLIADA A GRAN ALTURA) */
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; max-height: 800px; overflow-y: auto; padding-right: 5px; }
+        .preview-card { position: relative; border-radius: 8px; overflow: hidden; border: 1px solid var(--panel-border); cursor: pointer; background: #0f172a; transition: transform 0.15s, border-color 0.15s; }
         .preview-card:hover { transform: translateY(-2px); border-color: #38bdf8; }
-        .preview-card img { width: 100%; height: 110px; object-fit: cover; display: block; }
-        .preview-filename-tag { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(2px); padding: 3px 6px; font-size: 0.68rem; color: #38bdf8; font-weight: 600; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .preview-card img { width: 100%; height: 280px; object-fit: cover; display: block; }
+        .preview-filename-tag { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(2px); padding: 6px 8px; font-size: 0.8rem; color: #38bdf8; font-weight: 600; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
         .status-badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 12px; font-weight: bold; text-transform: uppercase; }
         .badge-idle { background: #334155; color: #cbd5e1; }
@@ -188,219 +195,273 @@
         <!-- Sidebar: Settings -->
         <div class="sidebar">
             
-            <!-- 0. Hugging Face Token Panel (Opcional) -->
-            <div class="panel">
-                <div class="panel-title">Hugging Face Token (Optional / Opcional)</div>
-                <div class="form-group" style="margin-bottom: 8px;">
-                    <label>HF Token / Token de HF:</label>
-                    <input type="password" id="hf_token" value="" placeholder="hf_..." autocomplete="off">
+            <!-- 0. Hugging Face Token Panel (CERRADO POR DEFECTO) -->
+            <div class="panel collapsed">
+                <div class="panel-title" onclick="togglePanel(this)">
+                    <span>Hugging Face Token (Optional / Opcional)</span>
+                    <span class="toggle-icon">▼</span>
                 </div>
-                <button type="button" class="btn btn-secondary btn-full" onclick="saveHfToken()">
-                    Save HF Token / Guardar HF Token
-                </button>
+                <div class="panel-body">
+                    <div class="form-group" style="margin-bottom: 8px;">
+                        <label>HF Token / Token de HF:</label>
+                        <input type="password" id="hf_token" value="" placeholder="hf_..." autocomplete="off">
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-full" onclick="saveHfToken()">
+                        Save HF Token / Guardar HF Token
+                    </button>
+                </div>
             </div>
 
-            <!-- 1. Pre-Cache Settings Panel -->
+            <!-- 1. Pre-Cache Settings Panel (ABIERTO POR DEFECTO) -->
             <div class="panel">
-                <div class="panel-title">1. Pre-Cache Settings / Config. Pre-Caché</div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Project Name / Proyecto:</label>
-                        <input type="text" id="project_name" value="" placeholder="Ej: cherry2" oninput="updateProjectPaths()">
+                <div class="panel-title" onclick="togglePanel(this)">
+                    <span>1. Pre-Cache Settings / Config. Pre-Caché</span>
+                    <span class="toggle-icon">▲</span>
+                </div>
+                <div class="panel-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Project Name / Proyecto:</label>
+                            <input type="text" id="project_name" value="" placeholder="Ej: cherry2" oninput="updateProjectPaths()">
+                        </div>
+                        <div class="form-group">
+                            <label>Trigger Word / Palabra Clave:</label>
+                            <input type="text" id="trigger_word" value="">
+                        </div>
                     </div>
+
                     <div class="form-group">
-                        <label>Trigger Word / Palabra Clave:</label>
-                        <input type="text" id="trigger_word" value="">
+                        <label>Dataset Path / Ruta del Dataset:</label>
+                        <div style="display:flex; gap:8px;">
+                            <input type="text" id="dataset_path" value="./dataset" onchange="loadDatasetInfo()">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="browseFolderNative('dataset')">Browse / Explorar</button>
+                        </div>
                     </div>
-                </div>
 
-                <div class="form-group">
-                    <label>Dataset Path / Ruta del Dataset:</label>
-                    <div style="display:flex; gap:8px;">
-                        <input type="text" id="dataset_path" value="./dataset" onchange="loadDatasetInfo()">
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="browseFolderNative('dataset')">Browse / Explorar</button>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label>Cache Folder / Carpeta Caché (Auto):</label>
-                    <input type="text" id="precache_cache_dir" value="./cached_data_krea2" readonly title="Ruta informativa generada automáticamente">
-                </div>
-
-                <div class="form-group">
-                    <label>Resolution / Resolución (px²):</label>
-                    <select id="target_area_select" onchange="syncResolution(this.value)">
-                        <option value="262144">512 x 512 (262,144 px²)</option>
-                        <option value="589824" selected>768 x 768 (589,824 px²)</option>
-                        <option value="1048576">1024 x 1024 (1,048,576 px²)</option>
-                        <option value="custom">Custom / Personalizada</option>
-                    </select>
-                    <input type="number" id="precache_target_area" value="589824" style="margin-top:6px; display:none;">
-                </div>
-
-                <div class="form-row">
                     <div class="form-group">
-                        <label>Multiple / Múltiplo:</label>
-                        <select id="precache_multiple">
-                            <option value="8">8</option>
-                            <option value="16" selected>16</option>
-                            <option value="32">32</option>
-                            <option value="64">64</option>
+                        <label>Cache Folder / Carpeta Caché (Auto):</label>
+                        <input type="text" id="precache_cache_dir" value="./cached_data_krea2" readonly title="Ruta informativa generada automáticamente">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Resolution / Resolución (px²):</label>
+                        <select id="target_area_select" onchange="syncResolution(this.value)">
+                            <option value="262144">512 x 512 (262,144 px²)</option>
+                            <option value="589824" selected>768 x 768 (589,824 px²)</option>
+                            <option value="1048576">1024 x 1024 (1,048,576 px²)</option>
+                            <option value="custom">Custom / Personalizada</option>
                         </select>
+                        <input type="number" id="precache_target_area" value="589824" style="margin-top:6px; display:none;">
                     </div>
-                    <div class="form-group">
-                        <label>Max Side / Lado Máx:</label>
-                        <input type="number" id="precache_max_side" value="1280">
-                    </div>
-                </div>
 
-                <div class="form-group">
-                    <label>Max Seq Len / Long. Sec.:</label>
-                    <input type="number" id="precache_max_seq_len" value="128">
-                </div>
-
-                <!-- Botones Load JSON y Save JSON -->
-                <div class="btn-row" style="margin-top:12px;">
-                    <button type="button" class="btn btn-secondary btn-tall" onclick="triggerLoadJson('precache')">
-                        <span class="main-text">Load JSON</span>
-                        <span class="sub-text">Cargar JSON</span>
-                    </button>
-                    <button type="button" class="btn btn-secondary btn-tall" onclick="savePrecacheSettings()">
-                        <span class="main-text">Save JSON</span>
-                        <span class="sub-text">Guardar JSON</span>
-                    </button>
-                </div>
-
-                <button type="button" class="btn btn-primary btn-tall btn-full" id="btn-precache" onclick="runPrecache()" style="margin-top:8px;">
-                    <span class="main-text">Start Pre-Cache</span>
-                    <span class="sub-text">Iniciar Pre-Caché</span>
-                </button>
-            </div>
-
-            <!-- 2. Training Settings Panel -->
-            <div class="panel">
-                <div class="panel-title">
-                    <span>2. Training Settings / Config. Entrenamiento</span>
-                    <span id="checkpoint-badge" style="font-size:0.75rem; color:#38bdf8;"></span>
-                </div>
-                
-                <div class="form-group">
-                    <label>Output Dir / Carpeta Salida (Auto):</label>
-                    <input type="text" id="train_output_dir" value="./krea2_lora_output" readonly title="Ruta informativa generada automáticamente">
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Total Steps / Pasos Totales:</label>
-                        <input type="number" id="train_total_steps" value="1200">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Multiple / Múltiplo:</label>
+                            <select id="precache_multiple">
+                                <option value="8">8</option>
+                                <option value="16" selected>16</option>
+                                <option value="32">32</option>
+                                <option value="64">64</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Side / Lado Máx:</label>
+                            <input type="number" id="precache_max_side" value="1280">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>Learning Rate / LR:</label>
-                        <input type="text" id="train_lr" value="0.0001">
-                    </div>
-                </div>
 
-                <div class="form-row">
                     <div class="form-group">
-                        <label>LoRA Rank (R):</label>
-                        <input type="number" id="train_lora_rank" value="16">
+                        <label>Max Seq Len / Long. Sec.:</label>
+                        <input type="number" id="precache_max_seq_len" value="128">
                     </div>
-                    <div class="form-group">
-                        <label>LoRA Alpha (A):</label>
-                        <input type="number" id="train_lora_alpha" value="32">
-                    </div>
-                </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Batch Size:</label>
-                        <input type="number" id="train_batch_size" value="1">
+                    <!-- Botones Load JSON y Save JSON -->
+                    <div class="btn-row" style="margin-top:12px;">
+                        <button type="button" class="btn btn-secondary btn-tall" onclick="triggerLoadJson('precache')">
+                            <span class="main-text">Load JSON</span>
+                            <span class="sub-text">Cargar JSON</span>
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-tall" onclick="savePrecacheSettings()">
+                            <span class="main-text">Save JSON</span>
+                            <span class="sub-text">Guardar JSON</span>
+                        </button>
                     </div>
-                    <div class="form-group">
-                        <label>Grad Accum Steps:</label>
-                        <input type="number" id="train_grad_accum" value="4">
-                    </div>
-                </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Save Every / Guardar Cada:</label>
-                        <input type="number" id="train_save_every" value="25">
-                    </div>
-                    <div class="form-group">
-                        <label>Seed / Semilla:</label>
-                        <input type="number" id="train_seed" value="42">
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Preview Every / Preview Cada:</label>
-                        <input type="number" id="train_preview_every" value="0">
-                    </div>
-                    <div class="form-group">
-                        <label>Caption Mode / Modo Sample:</label>
-                        <select id="train_preview_caption_mode">
-                            <option value="first">First / Primero</option>
-                            <option value="random">Random / Aleatorio</option>
-                            <option value="rotate4">Rotate 4 / Rotar 4</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- Botones Load JSON y Save JSON -->
-                <div class="btn-row" style="margin-top:12px;">
-                    <button type="button" class="btn btn-secondary btn-tall" onclick="triggerLoadJson('train')">
-                        <span class="main-text">Load JSON</span>
-                        <span class="sub-text">Cargar JSON</span>
-                    </button>
-                    <button type="button" class="btn btn-secondary btn-tall" onclick="saveTrainSettings()">
-                        <span class="main-text">Save JSON</span>
-                        <span class="sub-text">Guardar JSON</span>
-                    </button>
-                </div>
-
-                <!-- Botones Start/Resume y Stop -->
-                <div class="btn-row" style="margin-top:8px;">
-                    <button type="button" class="btn btn-success btn-tall" id="btn-train" onclick="runTrain()">
-                        <span class="main-text">Start / Resume</span>
-                        <span class="sub-text">Iniciar / Reanudar</span>
-                    </button>
-                    <button type="button" class="btn btn-danger btn-tall" id="btn-stop" onclick="stopScript()" disabled>
-                        <span class="main-text">Stop Training</span>
-                        <span class="sub-text">Detener</span>
+                    <button type="button" class="btn btn-primary btn-tall btn-full" id="btn-precache" onclick="runPrecache()" style="margin-top:8px;">
+                        <span class="main-text">Start Pre-Cache</span>
+                        <span class="sub-text">Iniciar Pre-Caché</span>
                     </button>
                 </div>
             </div>
 
-            <!-- 3. Export to WebUI Models Panel -->
+            <!-- 2. Training Settings Panel (ABIERTO POR DEFECTO) -->
             <div class="panel">
-                <div class="panel-title">3. Export to WebUI / Enviar a Models</div>
-                
-                <div class="form-group">
-                    <label>Final LoRA Filename / Nombre Final (.safetensors):</label>
-                    <input type="text" id="export_final_name" value="krea2_lora.safetensors" placeholder="mi_lora_krea2.safetensors">
+                <div class="panel-title" onclick="togglePanel(this)">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span>2. Training Settings / Config. Entrenamiento</span>
+                        <span id="checkpoint-badge" style="font-size:0.75rem; color:#38bdf8;"></span>
+                    </div>
+                    <span class="toggle-icon">▲</span>
                 </div>
+                
+                <div class="panel-body">
+                    <div class="form-group">
+                        <label>Output Dir / Carpeta Salida (Auto):</label>
+                        <input type="text" id="train_output_dir" value="./krea2_lora_output" readonly title="Ruta informativa generada automáticamente">
+                    </div>
 
-                <div class="form-group">
-                    <label>UI LoRA Folder / Carpeta models/lora (ComfyUI / Forge / A1111):</label>
-                    <div style="display:flex; gap:8px;">
-                        <input type="text" id="export_models_dir" value="" placeholder="C:/ComfyUI/models/loras">
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="browseFolderNative('export')">Browse / Explorar</button>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Total Steps / Pasos Totales:</label>
+                            <input type="number" id="train_total_steps" value="1200">
+                        </div>
+                        <div class="form-group">
+                            <label>Learning Rate / LR:</label>
+                            <input type="text" id="train_lr" value="0.0001">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>LoRA Rank (R):</label>
+                            <input type="number" id="train_lora_rank" value="16">
+                        </div>
+                        <div class="form-group">
+                            <label>LoRA Alpha (A):</label>
+                            <input type="number" id="train_lora_alpha" value="32">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Batch Size:</label>
+                            <input type="number" id="train_batch_size" value="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Grad Accum Steps:</label>
+                            <input type="number" id="train_grad_accum" value="4">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Save Every / Guardar Cada:</label>
+                            <input type="number" id="train_save_every" value="25">
+                        </div>
+                        <div class="form-group">
+                            <label>Seed (-1 o 0 = Random):</label>
+                            <input type="number" id="train_seed" value="42">
+                        </div>
+                    </div>
+
+                    <!-- TURBO LORA ACCELERATED PREVIEW SWITCH (MARCADO POR DEFECTO) -->
+                    <div class="form-group" style="background: #0f172a; padding: 10px; border-radius: 8px; border: 1px solid var(--panel-border); margin-top: 6px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <label style="margin: 0; font-weight: 600; color: #38bdf8; cursor: pointer;" for="train_use_turbo">
+                                🚀 Turbo LoRA (Fast Previews)
+                            </label>
+                            <input type="checkbox" id="train_use_turbo" checked onchange="toggleTurboMode(this.checked)" style="width: 18px; height: 18px; cursor: pointer;">
+                        </div>
+                        <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+                            <label style="font-size:0.75rem; color:var(--text-muted); margin:0; white-space:nowrap;">Strength / Potencia:</label>
+                            <input type="number" step="0.05" id="train_turbo_strength" value="1.0" style="padding:3px 8px; font-size:0.8rem; width:80px;">
+                        </div>
+                        <span style="font-size: 0.7rem; color: var(--text-muted); display: block; margin-top: 4px;">
+                            HuggingFace: Krea-2-NF4/LoRAs/krea2_turbo_lora_rank_64_bf16.safetensors
+                        </span>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Preview Every / Preview Cada:</label>
+                            <input type="number" id="train_preview_every" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label>Caption Mode / Modo Sample:</label>
+                            <select id="train_preview_caption_mode" onchange="toggleCaptionMode(this.value)">
+                                <option value="first">First / Primero</option>
+                                <option value="random">Random / Aleatorio</option>
+                                <option value="rotate4">Rotate 4 / Rotar 4</option>
+                                <option value="custom">Custom / Prompt Manual</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- CAMPO PROMPT MANUAL (SE MUESTRA SOLO EN MODO CUSTOM) -->
+                    <div class="form-group" id="custom_prompt_container" style="display:none; margin-top: 4px;">
+                        <label style="color:#38bdf8; font-weight:600;">Custom Preview Prompt / Prompt Manual:</label>
+                        <textarea id="train_preview_custom_prompt" rows="2" placeholder="Escribe aquí tu prompt personalizado para la previsualización..."></textarea>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Preview Steps / Pasos Preview:</label>
+                            <input type="number" id="train_preview_steps" value="8">
+                        </div>
+                        <div class="form-group">
+                            <label>Preview CFG / CFG Preview:</label>
+                            <input type="number" step="0.1" id="train_preview_cfg" value="0">
+                        </div>
+                    </div>
+
+                    <!-- Botones Load JSON y Save JSON -->
+                    <div class="btn-row" style="margin-top:12px;">
+                        <button type="button" class="btn btn-secondary btn-tall" onclick="triggerLoadJson('train')">
+                            <span class="main-text">Load JSON</span>
+                            <span class="sub-text">Cargar JSON</span>
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-tall" onclick="saveTrainSettings()">
+                            <span class="main-text">Save JSON</span>
+                            <span class="sub-text">Guardar JSON</span>
+                        </button>
+                    </div>
+
+                    <!-- Botones Start/Resume y Stop -->
+                    <div class="btn-row" style="margin-top:8px;">
+                        <button type="button" class="btn btn-success btn-tall" id="btn-train" onclick="runTrain()">
+                            <span class="main-text">Start / Resume</span>
+                            <span class="sub-text">Iniciar / Reanudar</span>
+                        </button>
+                        <button type="button" class="btn btn-danger btn-tall" id="btn-stop" onclick="stopScript()" disabled>
+                            <span class="main-text">Stop Training</span>
+                            <span class="sub-text">Detener</span>
+                        </button>
                     </div>
                 </div>
+            </div>
 
-                <button type="button" class="btn btn-warning btn-tall btn-full" onclick="sendToModels()" style="margin-top:5px;">
-                    <span class="main-text">🚀 Send to Models</span>
-                    <span class="sub-text">Enviar a Models</span>
-                </button>
+            <!-- 3. Export to WebUI Models Panel (ABIERTO POR DEFECTO) -->
+            <div class="panel">
+                <div class="panel-title" onclick="togglePanel(this)">
+                    <span>3. Export to WebUI / Enviar a Models</span>
+                    <span class="toggle-icon">▲</span>
+                </div>
+                
+                <div class="panel-body">
+                    <div class="form-group">
+                        <label>Final LoRA Filename / Nombre Final (.safetensors):</label>
+                        <input type="text" id="export_final_name" value="krea2_lora.safetensors" placeholder="mi_lora_krea2.safetensors">
+                    </div>
+
+                    <div class="form-group">
+                        <label>UI LoRA Folder / Carpeta models/lora (ComfyUI / Forge / A1111):</label>
+                        <div style="display:flex; gap:8px;">
+                            <input type="text" id="export_models_dir" value="" placeholder="C:/ComfyUI/models/loras">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="browseFolderNative('export')">Browse / Explorar</button>
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn btn-warning btn-tall btn-full" onclick="sendToModels()" style="margin-top:5px;">
+                        <span class="main-text">🚀 Send to Models</span>
+                        <span class="sub-text">Enviar a Models</span>
+                    </button>
+                </div>
             </div>
         </div>
 
         <!-- Right Column: Terminal, Dataset Inspector & Previews -->
         <div class="panel console-container">
-            <div class="panel-title">
+            <div class="panel-title" style="cursor:default;">
                 <span>Console Output / Terminal de Consola</span>
                 <span class="status-badge badge-idle" id="status-badge">IDLE / INACTIVO</span>
             </div>
@@ -409,7 +470,7 @@
 
             <!-- Dataset Inspector -->
             <div>
-                <div class="panel-title">
+                <div class="panel-title" style="cursor:default;">
                     <span>Dataset Inspector / Inspector (<span id="ds-count">0</span> img, <span id="ds-txt-count">0</span> txt)</span>
                     <div class="ds-toolbar">
                         <input type="text" class="ds-search" id="ds-search" placeholder="Search / Buscar..." oninput="filterDatasetGrid()">
@@ -426,7 +487,7 @@
 
             <!-- Previews -->
             <div>
-                <div class="panel-title">Generated Step Previews / Previsualizaciones Generadas</div>
+                <div class="panel-title" style="cursor:default;">Generated Step Previews / Previsualizaciones Generadas</div>
                 <div class="gallery" id="gallery"></div>
             </div>
         </div>
@@ -474,10 +535,41 @@
         let currentBrowserTarget = 'dataset';
         let currentLoadTarget = 'precache';
         
-        // Variables de control para detección de Pausa vs Finalización Completa
         let userRequestedStop = false;
         let lastExecutedStep = 0;
         let totalTargetSteps = 0;
+
+        function togglePanel(headerEl) {
+            const panel = headerEl.closest('.panel');
+            panel.classList.toggle('collapsed');
+            const icon = headerEl.querySelector('.toggle-icon');
+            if (icon) {
+                icon.innerText = panel.classList.contains('collapsed') ? '▼' : '▲';
+            }
+        }
+
+        function toggleTurboMode(isTurbo) {
+            const stepsInput = document.getElementById('train_preview_steps');
+            const cfgInput = document.getElementById('train_preview_cfg');
+            const strengthInput = document.getElementById('train_turbo_strength');
+            if (isTurbo) {
+                stepsInput.value = 8;
+                cfgInput.value = 0;
+                if (strengthInput) strengthInput.value = 1.0;
+            } else {
+                stepsInput.value = 30;
+                cfgInput.value = 4.5;
+            }
+        }
+
+        function toggleCaptionMode(mode) {
+            const container = document.getElementById('custom_prompt_container');
+            if (mode === 'custom') {
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        }
 
         async function updateSystemStats() {
             try {
@@ -488,7 +580,6 @@
                 document.getElementById('vram-text').innerText = `${data.vram.used_gb} / ${data.vram.total_gb} GB`;
                 document.getElementById('vram-bar').style.width = `${data.vram.percent}%`;
 
-                // Monitor Temperatura GPU (°C)
                 const temp = data.vram.temp_c || 0;
                 document.getElementById('gpu-temp-text').innerText = temp ? `${temp} °C` : 'N/A';
                 
@@ -594,9 +685,17 @@
                     if (t.batch_size) document.getElementById('train_batch_size').value = t.batch_size;
                     if (t.grad_accum_steps) document.getElementById('train_grad_accum').value = t.grad_accum_steps;
                     if (t.save_every) document.getElementById('train_save_every').value = t.save_every;
-                    if (t.seed) document.getElementById('train_seed').value = t.seed;
+                    if (t.seed !== undefined) document.getElementById('train_seed').value = t.seed;
                     if (t.preview_every) document.getElementById('train_preview_every').value = t.preview_every;
-                    if (t.preview_caption_mode) document.getElementById('train_preview_caption_mode').value = t.preview_caption_mode;
+                    if (t.preview_caption_mode) {
+                        document.getElementById('train_preview_caption_mode').value = t.preview_caption_mode;
+                        toggleCaptionMode(t.preview_caption_mode);
+                    }
+                    if (t.preview_custom_prompt !== undefined) document.getElementById('train_preview_custom_prompt').value = t.preview_custom_prompt;
+                    if (t.preview_steps !== undefined) document.getElementById('train_preview_steps').value = t.preview_steps;
+                    if (t.preview_cfg !== undefined) document.getElementById('train_preview_cfg').value = t.preview_cfg;
+                    if (t.use_turbo !== undefined) document.getElementById('train_use_turbo').checked = t.use_turbo;
+                    if (t.turbo_lora_strength !== undefined) document.getElementById('train_turbo_strength').value = t.turbo_lora_strength;
                     if (t.export_models_dir) document.getElementById('export_models_dir').value = t.export_models_dir;
                     if (t.export_final_name) document.getElementById('export_final_name').value = t.export_final_name;
                 }
@@ -606,7 +705,6 @@
         }
         loadSettings();
 
-        // CARGAR FICHERO JSON
         function triggerLoadJson(target) {
             currentLoadTarget = target;
             document.getElementById('json_file_input').click();
@@ -649,7 +747,15 @@
                     if (data.save_every !== undefined) document.getElementById('train_save_every').value = data.save_every;
                     if (data.seed !== undefined) document.getElementById('train_seed').value = data.seed;
                     if (data.preview_every !== undefined) document.getElementById('train_preview_every').value = data.preview_every;
-                    if (data.preview_caption_mode !== undefined) document.getElementById('train_preview_caption_mode').value = data.preview_caption_mode;
+                    if (data.preview_caption_mode !== undefined) {
+                        document.getElementById('train_preview_caption_mode').value = data.preview_caption_mode;
+                        toggleCaptionMode(data.preview_caption_mode);
+                    }
+                    if (data.preview_custom_prompt !== undefined) document.getElementById('train_preview_custom_prompt').value = data.preview_custom_prompt;
+                    if (data.preview_steps !== undefined) document.getElementById('train_preview_steps').value = data.preview_steps;
+                    if (data.preview_cfg !== undefined) document.getElementById('train_preview_cfg').value = data.preview_cfg;
+                    if (data.use_turbo !== undefined) document.getElementById('train_use_turbo').checked = data.use_turbo;
+                    if (data.turbo_lora_strength !== undefined) document.getElementById('train_turbo_strength').value = data.turbo_lora_strength;
                     if (data.export_models_dir !== undefined) document.getElementById('export_models_dir').value = data.export_models_dir;
                     if (data.export_final_name !== undefined) document.getElementById('export_final_name').value = data.export_final_name;
 
@@ -710,7 +816,8 @@
                 multiple: parseInt(document.getElementById('precache_multiple').value),
                 max_side: parseInt(document.getElementById('precache_max_side').value),
                 max_seq_len: parseInt(document.getElementById('precache_max_seq_len').value),
-                cache_dir: document.getElementById('precache_cache_dir').value
+                cache_dir: document.getElementById('precache_cache_dir').value,
+                preview_custom_prompt: document.getElementById('train_preview_custom_prompt').value.trim()
             };
             const res = await fetch('/api/save-precache', { method: 'POST', body: JSON.stringify(precacheData) });
             const data = await res.json();
@@ -738,6 +845,13 @@
                 seed: parseInt(document.getElementById('train_seed').value),
                 preview_every: parseInt(document.getElementById('train_preview_every').value),
                 preview_caption_mode: document.getElementById('train_preview_caption_mode').value,
+                preview_custom_prompt: document.getElementById('train_preview_custom_prompt').value.trim(),
+                preview_steps: parseInt(document.getElementById('train_preview_steps').value),
+                preview_cfg: parseFloat(document.getElementById('train_preview_cfg').value),
+                use_turbo: document.getElementById('train_use_turbo').checked,
+                turbo_lora_strength: parseFloat(document.getElementById('train_turbo_strength').value),
+                use_filter_bypass: false,
+                filter_bypass_strength: 0.01,
                 export_models_dir: document.getElementById('export_models_dir').value,
                 export_final_name: document.getElementById('export_final_name').value
             };
@@ -781,7 +895,6 @@
             appendTerminal(`[SYSTEM] Launching / Iniciando ${scriptName}...`);
             setRunningState(true);
 
-            // Reiniciar flags de seguimiento de pasos y detención
             userRequestedStop = false;
             lastExecutedStep = 0;
             totalTargetSteps = 0;
@@ -812,7 +925,6 @@
                                 if (msg.type === 'output') {
                                     appendTerminal(msg.text, msg.replace);
 
-                                    // Extraer paso actual / paso objetivo si la línea es de progreso
                                     const stepMatch = msg.text.match(/Step\/Paso\s+(\d+)\/(\d+)/i);
                                     if (stepMatch) {
                                         lastExecutedStep = parseInt(stepMatch[1]);

@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-2_train_lora_krea2.py — Entrenamiento LoRA para Krea 2 (RAW) con NF4 / LoRA Training for Krea 2
-
-Lee configuración desde train_settings.json si existe.
-Reads configuration from train_settings.json if present.
-"""
 import os
 import gc
 import math
@@ -22,7 +15,7 @@ import torch.nn.functional as F
 from diffusers import DiffusionPipeline
 from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
 import bitsandbytes as bnb
-from safetensors.torch import save_file, load
+from safetensors.torch import save_file, load, load_file
 from bitsandbytes.nn import Linear4bit, Params4bit
 from safetensors import safe_open
 from bitsandbytes.functional import QuantState
@@ -33,7 +26,8 @@ try:
 except Exception:
     pass
 
-# ── DEFAULTS / VALORES POR DEFECTO ──────────────────────────────────────────
+HF_REPO_ID = "AcademiaSD/Krea-2-NF4-for-LoRA-Training"
+
 DEFAULTS = {
     "model_id": "Krea-2-NF4",
     "cache_dir": "./cached_data_krea2",
@@ -52,14 +46,18 @@ DEFAULTS = {
     "seed": 42,
     "timestep_sampling": "krea2_shift",
     "preview_every": 0,
-    "preview_steps": 28,
-    "preview_cfg": 3.5,
+    "preview_steps": 8,
+    "preview_cfg": 0.0,
     "preview_caption_mode": "first",
+    "preview_custom_prompt": "",
+    "use_turbo": True,
+    "turbo_lora_strength": 1.0,
+    "use_filter_bypass": False,
+    "filter_bypass_strength": 10.0,
     "project_name": "",
     "trigger_word": "",
 }
 
-# ── CARGAR CONFIGURACIÓN / LOAD CONFIG ──────────────────────────────────────
 CONFIG_PATH = "train_settings.json"
 
 if os.path.exists(CONFIG_PATH):
@@ -87,11 +85,20 @@ TIMESTEP_SAMPLING = cfg.get("timestep_sampling", DEFAULTS["timestep_sampling"])
 PREVIEW_EVERY     = cfg.get("preview_every",     DEFAULTS["preview_every"])
 PREVIEW_STEPS     = cfg.get("preview_steps",     DEFAULTS["preview_steps"])
 PREVIEW_CFG       = cfg.get("preview_cfg",       DEFAULTS["preview_cfg"])
-PREVIEW_CAPTION_MODE = cfg.get("preview_caption_mode", DEFAULTS["preview_caption_mode"])
+PREVIEW_CAPTION_MODE  = cfg.get("preview_caption_mode",  DEFAULTS["preview_caption_mode"])
+PREVIEW_CUSTOM_PROMPT = cfg.get("preview_custom_prompt", DEFAULTS["preview_custom_prompt"]).strip()
+
+USE_TURBO            = cfg.get("use_turbo",            DEFAULTS["use_turbo"])
+TURBO_LORA_STRENGTH  = cfg.get("turbo_lora_strength",  DEFAULTS["turbo_lora_strength"])
+TURBO_LORA_PATH      = os.path.join(MODEL_ID, "LoRAs", "krea2_turbo_lora_rank_64_bf16.safetensors")
+
+USE_FILTER_BYPASS      = cfg.get("use_filter_bypass",      DEFAULTS["use_filter_bypass"])
+FILTER_BYPASS_STRENGTH = cfg.get("filter_bypass_strength", DEFAULTS["filter_bypass_strength"])
+FILTER_BYPASS_PATH     = os.path.join(MODEL_ID, "LoRAs", "krea2filterbypass3.safetensors")
+
 TRIGGER_WORD      = cfg.get("trigger_word", "")
 PROJECT_NAME      = cfg.get("project_name", "").strip()
 
-# Formato automático de carpetas según el nombre del proyecto
 if PROJECT_NAME:
     CACHE_DIR  = f"./cached_data_krea2_{PROJECT_NAME}"
     OUTPUT_DIR = f"./krea2_lora_output_{PROJECT_NAME}"
@@ -108,14 +115,20 @@ print(f"  Total Steps / Pasos      : {TOTAL_STEPS}")
 print(f"  Learning Rate / LR       : {LR}")
 print(f"  LoRA Rank/Alpha          : {LORA_RANK}/{LORA_ALPHA}")
 print(f"  Batch / Grad Accum       : {BATCH_SIZE}/{GRAD_ACCUM_STEPS}")
+print(f"  Preview Mode / Prompt    : Mode={PREVIEW_CAPTION_MODE} | Custom='{PREVIEW_CUSTOM_PROMPT}'")
+print(f"  Preview Every / Steps / CFG: {PREVIEW_EVERY} / {PREVIEW_STEPS} / {PREVIEW_CFG}")
+print(f"  Seed Configured / Semilla: {SEED} ({'RANDOM' if SEED <= 0 else 'FIXED'})")
+print(f"  Turbo LoRA Accelerated   : {'ON (Strength=' + str(TURBO_LORA_STRENGTH) + ')' if USE_TURBO else 'OFF'}")
+print(f"  Filter Bypass LoRA       : {'ON (Strength=' + str(FILTER_BYPASS_STRENGTH) + ')' if USE_FILTER_BYPASS else 'OFF'}")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 RESUME_DIR = os.path.join(OUTPUT_DIR, "resume_checkpoint")
 OPT_FILE   = os.path.join(OUTPUT_DIR, "optimizer.pt")
 STEP_FILE  = os.path.join(OUTPUT_DIR, "current_step.txt")
 
-torch.manual_seed(SEED)
-random.seed(SEED)
+if SEED > 0:
+    torch.manual_seed(SEED)
+    random.seed(SEED)
 
 
 def free_vram():
@@ -138,7 +151,6 @@ def get_hf_token():
 
 
 def enable_hf_file_progress():
-    """ Fuerza a tqdm y huggingface_hub a mostrar progreso individual de MBs por archivo """
     try:
         import tqdm
         import tqdm.auto
@@ -167,6 +179,33 @@ def enable_hf_file_progress():
     os.environ["TQDM_MININTERVAL"] = "0.5"
 
 
+def ensure_file_downloaded(local_path, repo_id, filename_in_repo):
+    if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+        return local_path
+
+    print(f"⚠ Missing LoRA file / Archivo LoRA no encontrado: {local_path}")
+    print(f"  Downloading from HF / Descargando desde Hugging Face: {filename_in_repo}")
+
+    enable_hf_file_progress()
+    hf_token = get_hf_token()
+
+    try:
+        from huggingface_hub import hf_hub_download
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        downloaded = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename_in_repo,
+            local_dir=MODEL_ID,
+            local_dir_use_symlinks=False,
+            token=hf_token
+        )
+        print(f"✓ LoRA downloaded successfully / Descargado con éxito: {downloaded}")
+        return downloaded
+    except Exception as e:
+        print(f"[!] Warning downloading {filename_in_repo} from HF: {e}")
+        return local_path
+
+
 def ensure_model_downloaded(local_path, repo_id):
     if os.path.exists(local_path) and os.path.isdir(local_path):
         has_content = any(
@@ -179,17 +218,13 @@ def ensure_model_downloaded(local_path, repo_id):
 
     print(f"⚠ Local model not found at / No se encontró modelo local en: {local_path}")
     print(f"  Downloading from Hugging Face / Descargando desde Hugging Face: {repo_id}")
-    print(f"  This may take several minutes / Esto puede tardar varios minutos...")
 
     enable_hf_file_progress()
 
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        raise ImportError(
-            "huggingface_hub is required. Install with / Se requiere 'huggingface_hub':\n"
-            "  pip install huggingface_hub"
-        )
+        raise ImportError("huggingface_hub is required. Install with pip install huggingface_hub")
 
     hf_token = get_hf_token()
 
@@ -382,6 +417,491 @@ class VaeHolder:
         return cls.vae
 
 
+def clean_module_prefix(name):
+    if not isinstance(name, str):
+        return ""
+    name = name.strip()
+
+    prefixes = (
+        "base_model.model.",
+        "base_model.",
+        "model.",
+        "transformer.",
+        "diffusion_model.",
+        "lora_unet_",
+    )
+
+    changed = True
+    while changed:
+        changed = False
+        for p in prefixes:
+            if name.startswith(p):
+                name = name[len(p):]
+                changed = True
+
+    return name
+
+
+TURBO_KREA2_ALIASES = {
+    "attn.wq": "attn.to_q",
+    "attn.wk": "attn.to_k",
+    "attn.wv": "attn.to_v",
+    "attn.wo": "attn.to_out.0",
+    "attn.gate": "attn.to_gate",
+    "mlp.gate": "ff.gate",
+    "mlp.up": "ff.up",
+    "mlp.down": "ff.down",
+}
+
+
+def _normalize_dot_name(name):
+    name = clean_module_prefix(name)
+    return name.replace("-", "_").strip(".").lower()
+
+
+def _turbo_to_krea2_dot_name(name):
+    s = _normalize_dot_name(name)
+
+    if s.startswith("transformer_blocks."):
+        return s
+
+    if s.startswith("blocks."):
+        s = "transformer_blocks." + s[len("blocks."):]
+        for old, new in sorted(TURBO_KREA2_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+            suffix = "." + old
+            if s.endswith(suffix):
+                s = s[:-len(suffix)] + "." + new
+                break
+        return s
+
+    TOP_LEVEL_MAP = {
+        "first": "img_in",
+        "last.linear": "final_layer",
+        "tmlp.0": "time_embed.linear_1",
+        "tmlp.2": "time_embed.linear_2",
+        "tproj.1": "time_mod_proj",
+        "txtmlp.1": "txt_in.linear_1",
+        "txtmlp.3": "txt_in.linear_2",
+    }
+    if s in TOP_LEVEL_MAP:
+        return TOP_LEVEL_MAP[s]
+
+    if s.startswith("txtfusion."):
+        s = "text_fusion." + s[len("txtfusion."):]
+        for old, new in sorted(TURBO_KREA2_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+            suffix = "." + old
+            if s.endswith(suffix):
+                s = s[:-len(suffix)] + "." + new
+                break
+        return s
+
+    return s
+
+
+def get_candidate_keys(base_k):
+    clean = _normalize_dot_name(base_k)
+    mapped = _turbo_to_krea2_dot_name(base_k)
+
+    candidates_dot = [
+        mapped,
+        clean,
+    ]
+
+    if clean.startswith("blocks."):
+        candidates_dot.append(mapped.replace("transformer_blocks.", "single_transformer_blocks.", 1))
+        candidates_dot.append(mapped.replace("transformer_blocks.", "double_blocks.", 1))
+        candidates_dot.append(mapped.replace("transformer_blocks.", "single_blocks.", 1))
+
+    candidates = []
+    for cand in candidates_dot:
+        cand = cand.strip(".")
+        candidates.extend([
+            cand,
+            "base_model.model." + cand,
+            "base_model." + cand,
+            "model." + cand,
+            "transformer." + cand,
+        ])
+
+    for cand in list(candidates_dot):
+        u = cand.replace(".", "_")
+        candidates.extend([
+            u,
+            "base_model_model_" + u,
+            "base_model_" + u,
+        ])
+
+    return list(dict.fromkeys(candidates))
+
+
+def _extract_external_lora_pairs(sd, device, dtype):
+    lora_pairs = {}
+    direct_deltas = {}
+
+    for k, v in sd.items():
+        is_lora = False
+
+        for pattern in (".lora_A", ".lora_down", ".lora.down", "_lora_A", "_lora_down"):
+            if pattern in k:
+                base_k = k.split(pattern, 1)[0]
+                lora_pairs.setdefault(base_k, {})["A"] = v.to(device=device, dtype=dtype)
+                is_lora = True
+                break
+
+        if is_lora:
+            continue
+
+        for pattern in (".lora_B", ".lora_up", ".lora.up", "_lora_B", "_lora_up"):
+            if pattern in k:
+                base_k = k.split(pattern, 1)[0]
+                lora_pairs.setdefault(base_k, {})["B"] = v.to(device=device, dtype=dtype)
+                is_lora = True
+                break
+
+        if not is_lora:
+            base_k = k
+            for suffix in (".diff_b", ".diff", ".weight", ".bias"):
+                if base_k.endswith(suffix):
+                    base_k = base_k[:-len(suffix)]
+                    break
+            direct_deltas[base_k] = v.to(device=device, dtype=dtype)
+
+    return lora_pairs, direct_deltas
+
+
+def _build_peft_target_map(model):
+    module_map = {}
+    entries = []
+
+    for name, mod in model.named_modules():
+        target_obj = None
+
+        if hasattr(mod, "base_layer"):
+            target_obj = mod.base_layer
+        elif isinstance(mod, (torch.nn.Linear, bnb.nn.Linear4bit)):
+            target_obj = mod
+        else:
+            continue
+
+        if not isinstance(target_obj, (torch.nn.Linear, bnb.nn.Linear4bit)):
+            continue
+
+        canonical = _normalize_dot_name(name)
+        canonical_no_prefix = canonical
+        if canonical_no_prefix.startswith("base_model.model."):
+            canonical_no_prefix = canonical_no_prefix[len("base_model.model."):]
+
+        dims = (int(target_obj.out_features), int(target_obj.in_features))
+
+        entry = {
+            "wrapper_name": name,
+            "canonical": canonical_no_prefix,
+            "module": target_obj,
+            "dims": dims,
+        }
+
+        entries.append(entry)
+        module_map[canonical_no_prefix] = entry
+        module_map[canonical] = entry
+
+    return module_map, entries
+
+
+def _resolve_external_lora_target(base_k, a_w, b_w, module_map, entries):
+    candidates = get_candidate_keys(base_k)
+
+    for cand in candidates:
+        canonical = _normalize_dot_name(cand)
+        if canonical in module_map:
+            entry = module_map[canonical]
+            expected_in, expected_out = int(a_w.shape[1]), int(b_w.shape[0])
+            if entry["dims"][1] == expected_in and entry["dims"][0] == expected_out:
+                return entry, "alias_exact"
+
+    turbo = _normalize_dot_name(base_k)
+
+    if turbo.startswith("blocks."):
+        parts = turbo.split(".")
+        if len(parts) >= 4:
+            try:
+                block_idx = int(parts[1])
+            except ValueError:
+                block_idx = None
+
+            semantic = ".".join(parts[2:])
+            mapped_semantic = semantic
+            for old, new in sorted(TURBO_KREA2_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+                if semantic == old:
+                    mapped_semantic = new
+                    break
+
+            expected_canonical = f"transformer_blocks.{block_idx}.{mapped_semantic}" if block_idx is not None else None
+            if expected_canonical:
+                entry = module_map.get(expected_canonical)
+                if entry is not None and entry["dims"][1] == int(a_w.shape[1]) and entry["dims"][0] == int(b_w.shape[0]):
+                    return entry, "explicit_structural"
+
+    if turbo.startswith("blocks."):
+        parts = turbo.split(".")
+        if len(parts) >= 4:
+            try:
+                block_idx = int(parts[1])
+            except ValueError:
+                block_idx = None
+
+            semantic = ".".join(parts[2:])
+            mapped_semantic = semantic
+            for old, new in sorted(TURBO_KREA2_ALIASES.items(), key=lambda x: len(x[0]), reverse=True):
+                if semantic == old:
+                    mapped_semantic = new
+                    break
+
+            if block_idx is not None:
+                suffix = f"transformer_blocks.{block_idx}.{mapped_semantic}"
+                matches = [e for e in entries if e["canonical"] == suffix and e["dims"][1] == int(a_w.shape[1]) and e["dims"][0] == int(b_w.shape[0])]
+                if len(matches) == 1:
+                    return matches[0], "structural"
+
+    if turbo.startswith("blocks."):
+        parts = turbo.split(".")
+        if len(parts) >= 2:
+            try:
+                block_idx = int(parts[1])
+            except ValueError:
+                block_idx = None
+
+            if block_idx is not None:
+                prefix = f"transformer_blocks.{block_idx}."
+                matches = [e for e in entries if e["canonical"].startswith(prefix) and e["dims"][1] == int(a_w.shape[1]) and e["dims"][0] == int(b_w.shape[0])]
+                if len(matches) == 1:
+                    return matches[0], "block_dimension"
+
+    expected_in, expected_out = int(a_w.shape[1]), int(b_w.shape[0])
+    matches = [e for e in entries if e["dims"] == (expected_out, expected_in)]
+    if len(matches) == 1:
+        return matches[0], "global_dimension"
+
+    return None, "not_found"
+
+
+def _make_external_lora_hook(a_w, b_w, strength):
+    def hook(module, input_args, output):
+        if not input_args:
+            return output
+        x = input_args[0]
+        if not torch.is_tensor(x) or x.shape[-1] != a_w.shape[1]:
+            return output
+
+        original_shape = x.shape
+        x_flat = x.reshape(-1, x.shape[-1]).to(device=a_w.device, dtype=a_w.dtype)
+        inter = F.linear(x_flat, a_w)
+        delta = F.linear(inter, b_w) * strength
+        delta = delta.reshape(*original_shape[:-1], delta.shape[-1])
+        return output + delta.to(device=output.device, dtype=output.dtype)
+
+    return hook
+
+
+def _make_direct_delta_hook(d_tensor, strength):
+    def hook(module, input_args, output):
+        if not input_args:
+            return output
+        x = input_args[0]
+        if not torch.is_tensor(x):
+            return output
+
+        if d_tensor.ndim == 2:
+            d = d_tensor
+            if x.shape[-1] != d.shape[1]:
+                if x.shape[-1] == d.shape[0]:
+                    d = d.T.contiguous()
+                else:
+                    return output
+
+            original_shape = x.shape
+            x_flat = x.reshape(-1, x.shape[-1]).to(device=d.device, dtype=d.dtype)
+            delta = F.linear(x_flat, d) * strength
+            delta = delta.reshape(*original_shape[:-1], delta.shape[-1])
+            return output + delta.to(device=output.device, dtype=output.dtype)
+
+        if d_tensor.ndim == 1:
+            if d_tensor.shape[0] == output.shape[-1]:
+                return output + (d_tensor * strength).to(device=output.device, dtype=output.dtype)
+            return output
+
+        try:
+            return output + (d_tensor * strength).to(device=output.device, dtype=output.dtype)
+        except Exception:
+            return output
+
+    return hook
+
+
+def _apply_layerwise_scale_hooks(model, scale_tensor, layer_indices, strength, tag):
+    scales = scale_tensor.flatten().cpu().to(torch.float32).tolist()
+    if len(scales) != len(layer_indices):
+        return []
+
+    block_map = {}
+    for name, mod in model.named_modules():
+        for pattern in ("transformer_blocks.", "blocks.", "single_transformer_blocks.", "double_blocks."):
+            if pattern in name:
+                suffix = name.split(pattern, 1)[1]
+                part = suffix.split(".")[0]
+                try:
+                    idx = int(part)
+                    if idx not in block_map or len(name) < len(block_map[idx][0]):
+                        block_map[idx] = (name, mod)
+                except ValueError:
+                    pass
+
+    hooks = []
+    for idx, base_scale in zip(layer_indices, scales):
+        if idx not in block_map:
+            continue
+
+        final_scale = 1.0 + (base_scale - 1.0) * strength
+        name, mod = block_map[idx]
+
+        def _make_scale_hook(s):
+            def hook(module, input_args, output):
+                if torch.is_tensor(output):
+                    return output * s
+                if isinstance(output, tuple) and len(output) > 0 and torch.is_tensor(output[0]):
+                    return (output[0] * s,) + output[1:]
+                return output
+            return hook
+
+        handle = mod.register_forward_hook(_make_scale_hook(final_scale))
+        hooks.append(handle)
+
+    return hooks
+
+
+def apply_preview_lora_hooks(
+    model,
+    lora_path,
+    tag="Preview LoRA",
+    strength=1.0,
+    device="cuda",
+    dtype=torch.bfloat16,
+):
+    if not os.path.exists(lora_path):
+        print(f"  [!] {tag} file not found at: {lora_path}")
+        return []
+
+    try:
+        sd = load_file(lora_path, device="cpu")
+    except Exception as e:
+        print(f"  [!] Failed to load {tag}: {e}")
+        return []
+
+    module_map, entries = _build_peft_target_map(model)
+    lora_pairs, direct_deltas = _extract_external_lora_pairs(sd, device, dtype)
+
+    hooks = []
+    stats = {
+        "alias_exact": 0,
+        "explicit_structural": 0,
+        "structural": 0,
+        "block_dimension": 0,
+        "global_dimension": 0,
+        "not_found": 0,
+        "dimension_error": 0,
+        "direct": 0,
+        "layer_scale": 0,
+    }
+
+    for base_k, weights in lora_pairs.items():
+        if "A" not in weights or "B" not in weights:
+            continue
+
+        a_w, b_w = weights["A"], weights["B"]
+        if a_w.ndim != 2 or b_w.ndim != 2:
+            stats["dimension_error"] += 1
+            continue
+
+        target_entry, reason = _resolve_external_lora_target(base_k, a_w, b_w, module_map, entries)
+        if target_entry is None:
+            stats["not_found"] += 1
+            continue
+
+        expected_in, expected_out = target_entry["dims"][1], target_entry["dims"][0]
+        if (a_w.shape[1] != expected_in or b_w.shape[0] != expected_out or a_w.shape[0] != b_w.shape[1]):
+            if (a_w.shape[0] == expected_in and b_w.shape[1] == expected_out and a_w.shape[1] == b_w.shape[0]):
+                a_w, b_w = a_w.T.contiguous(), b_w.T.contiguous()
+            else:
+                stats["dimension_error"] += 1
+                continue
+
+        try:
+            hook_fn = _make_external_lora_hook(a_w, b_w, strength)
+            handle = target_entry["module"].register_forward_hook(hook_fn)
+            hooks.append(handle)
+            stats[reason] = stats.get(reason, 0) + 1
+        except Exception:
+            pass
+
+    for base_k, tensor in list(direct_deltas.items()):
+        is_scale_vector = False
+        if tensor.numel() == 12 and tensor.ndim <= 2:
+            candidates = get_candidate_keys(base_k)
+            maps_to_linear = any(_normalize_dot_name(cand) in module_map for cand in candidates)
+            if not maps_to_linear:
+                is_scale_vector = True
+
+        if is_scale_vector:
+            layer_indices = [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35]
+            scale_hooks = _apply_layerwise_scale_hooks(model, tensor, layer_indices, strength, tag)
+            if scale_hooks:
+                hooks.extend(scale_hooks)
+                stats["layer_scale"] += 1
+                del direct_deltas[base_k]
+                continue
+
+        target_entry = None
+        candidates = get_candidate_keys(base_k)
+        for cand in candidates:
+            canonical = _normalize_dot_name(cand)
+            if canonical in module_map:
+                target_entry = module_map[canonical]
+                break
+
+        if target_entry is None and tensor.ndim == 2:
+            matches = [e for e in entries if e["dims"] == (tensor.shape[0], tensor.shape[1])]
+            if len(matches) == 1:
+                target_entry = matches[0]
+            else:
+                matches_t = [e for e in entries if e["dims"] == (tensor.shape[1], tensor.shape[0])]
+                if len(matches_t) == 1:
+                    target_entry = matches_t[0]
+                    tensor = tensor.T.contiguous()
+
+        if target_entry is None:
+            continue
+
+        t = tensor
+        if t.ndim == 2:
+            expected_out, expected_in = target_entry["dims"]
+            if t.shape == (expected_in, expected_out):
+                t = t.T.contiguous()
+            if t.shape != (expected_out, expected_in):
+                continue
+
+        try:
+            hook_fn = _make_direct_delta_hook(t, strength)
+            handle = target_entry["module"].register_forward_hook(hook_fn)
+            hooks.append(handle)
+            stats["direct"] += 1
+        except Exception:
+            pass
+
+    total_injected = len(hooks)
+    print(f"  [{tag}] Injected {total_injected} hooks (Strength={strength}).")
+
+    return hooks
+
+
 def run_preview(model, scheduler, embed, mask, neg, size, step, shift_cfg):
     H, W = size
     gh, gw = H // 16, W // 16
@@ -389,47 +909,92 @@ def run_preview(model, scheduler, embed, mask, neg, size, step, shift_cfg):
     was_training = model.training
     model.eval()
 
-    g = torch.Generator(device=device).manual_seed(SEED)
-    latents = torch.randn((1, 16, H // 8, W // 8), generator=g, device=device, dtype=torch.bfloat16)
-    latents = pack_latents(latents)
-    pos_ids = prepare_position_ids(embed.shape[1], gh, gw, device)
-    embed, mask = embed.to(device), mask.to(device)
-    if neg is not None:
-        neg = (neg[0].to(device), neg[1].to(device))
+    if SEED <= 0:
+        actual_seed = random.randint(1, 2147483647)
+    else:
+        actual_seed = SEED
 
-    sigmas = np.linspace(1.0, 1.0 / PREVIEW_STEPS, PREVIEW_STEPS)
-    mu = calculate_shift(latents.shape[1], *shift_cfg)
-    scheduler.set_timesteps(PREVIEW_STEPS, device=device, sigmas=sigmas, mu=mu)
+    print(f"  ↳ Preview Seed used / Semilla utilizada: {actual_seed}")
 
-    with torch.no_grad():
-        for t in scheduler.timesteps:
-            tt = (t / scheduler.config.num_train_timesteps).expand(1).to(torch.bfloat16)
-            pred = model(hidden_states=latents, encoder_hidden_states=embed, timestep=tt,
-                         position_ids=pos_ids, encoder_attention_mask=mask, return_dict=False)[0]
-            if neg is not None:
-                pred_u = model(hidden_states=latents, encoder_hidden_states=neg[0], timestep=tt,
-                               position_ids=pos_ids, encoder_attention_mask=neg[1], return_dict=False)[0]
-                pred = pred + PREVIEW_CFG * (pred - pred_u)
-            latents = scheduler.step(pred, t, latents, return_dict=False)[0]
+    preview_hooks = []
+    if USE_TURBO:
+        ensure_file_downloaded(TURBO_LORA_PATH, HF_REPO_ID, "LoRAs/krea2_turbo_lora_rank_64_bf16.safetensors")
+        preview_hooks.extend(apply_preview_lora_hooks(model, TURBO_LORA_PATH, tag="🚀 Turbo LoRA", strength=TURBO_LORA_STRENGTH, device=device))
+    if USE_FILTER_BYPASS:
+        ensure_file_downloaded(FILTER_BYPASS_PATH, HF_REPO_ID, "LoRAs/krea2filterbypass3.safetensors")
+        preview_hooks.extend(apply_preview_lora_hooks(model, FILTER_BYPASS_PATH, tag="🔓 Filter Bypass", strength=FILTER_BYPASS_STRENGTH, device=device))
 
-        vae = VaeHolder.get().to(device)
-        lat = unpack_latents(latents, H // 8, W // 8).to(vae.dtype).unsqueeze(2)
-        mean = torch.tensor(vae.config.latents_mean, device=device, dtype=lat.dtype).view(1, -1, 1, 1, 1)
-        std  = torch.tensor(vae.config.latents_std,  device=device, dtype=lat.dtype).view(1, -1, 1, 1, 1)
-        img = vae.decode(lat * std + mean, return_dict=False)[0][:, :, 0]
-        img = ((img.float() / 2 + 0.5).clamp(0, 1)[0].cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
-        vae.to("cpu")
+    try:
+        g = torch.Generator(device=device).manual_seed(actual_seed)
+        latents = torch.randn((1, 16, H // 8, W // 8), generator=g, device=device, dtype=torch.bfloat16)
+        latents = pack_latents(latents)
+        pos_ids = prepare_position_ids(embed.shape[1], gh, gw, device)
+        embed, mask = embed.to(device), mask.to(device)
+        if neg is not None:
+            neg = (neg[0].to(device), neg[1].to(device))
 
-    from PIL import Image
-    out = os.path.join(OUTPUT_DIR, f"preview_step_{step}.png")
-    Image.fromarray(img).save(out)
-    print(f"\n  ↳ Preview saved to / Preview guardada: {out}")
-    if was_training:
-        model.train()
-    free_vram()
+        sigmas = np.linspace(1.0, 1.0 / PREVIEW_STEPS, PREVIEW_STEPS)
+        mu = calculate_shift(latents.shape[1], *shift_cfg)
+        scheduler.set_timesteps(PREVIEW_STEPS, device=device, sigmas=sigmas, mu=mu)
+
+        with torch.no_grad():
+            for t in scheduler.timesteps:
+                tt = (t / scheduler.config.num_train_timesteps).expand(1).to(torch.bfloat16)
+                pred = model(hidden_states=latents, encoder_hidden_states=embed, timestep=tt,
+                             position_ids=pos_ids, encoder_attention_mask=mask, return_dict=False)[0]
+                if neg is not None and PREVIEW_CFG > 1.0:
+                    pred_u = model(hidden_states=latents, encoder_hidden_states=neg[0], timestep=tt,
+                                   position_ids=pos_ids, encoder_attention_mask=neg[1], return_dict=False)[0]
+                    pred = pred + PREVIEW_CFG * (pred - pred_u)
+                latents = scheduler.step(pred, t, latents, return_dict=False)[0]
+
+            vae = VaeHolder.get().to(device)
+            lat = unpack_latents(latents, H // 8, W // 8).to(vae.dtype).unsqueeze(2)
+            mean = torch.tensor(vae.config.latents_mean, device=device, dtype=lat.dtype).view(1, -1, 1, 1, 1)
+            std  = torch.tensor(vae.config.latents_std,  device=device, dtype=lat.dtype).view(1, -1, 1, 1, 1)
+            img = vae.decode(lat * std + mean, return_dict=False)[0][:, :, 0]
+            img = ((img.float() / 2 + 0.5).clamp(0, 1)[0].cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
+            vae.to("cpu")
+
+        from PIL import Image
+        out = os.path.join(OUTPUT_DIR, f"preview_step_{step}.png")
+        Image.fromarray(img).save(out)
+        print(f"  ↳ Preview saved to / Preview guardada: {out}")
+    finally:
+        for h in preview_hooks:
+            h.remove()
+        if was_training:
+            model.train()
+        free_vram()
 
 
-# ── ENTRENAMIENTO / TRAINING ─────────────────────────────────────────────────
+def ensure_custom_prompt_encoded():
+    if PREVIEW_CAPTION_MODE == "custom" and PREVIEW_CUSTOM_PROMPT:
+        c_emb_path = os.path.join(CACHE_DIR, "_custom_embed.pt")
+        c_msk_path = os.path.join(CACHE_DIR, "_custom_mask.pt")
+        
+        full_p = PREVIEW_CUSTOM_PROMPT
+        if TRIGGER_WORD and TRIGGER_WORD.lower() not in full_p.lower():
+            full_p = f"{TRIGGER_WORD}, {full_p}".strip(", ")
+            
+        print(f"\n[Custom Prompt] Encoding text: '{full_p}'...")
+        te_pipe = DiffusionPipeline.from_pretrained(
+            MODEL_ID,
+            transformer=None,
+            vae=None,
+            torch_dtype=torch.bfloat16,
+        ).to("cuda")
+
+        with torch.inference_mode():
+            c_emb, c_msk = te_pipe.encode_prompt(prompt=full_p, max_sequence_length=128)
+            torch.save(c_emb.cpu(), c_emb_path)
+            torch.save(c_msk.cpu(), c_msk_path)
+
+        del te_pipe
+        free_vram()
+        print("  ✓ Custom Prompt encoded and ready for previews.")
+
+
 def train_krea2():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
@@ -441,8 +1006,10 @@ def train_krea2():
 
     ensure_model_downloaded(
         local_path=MODEL_ID,
-        repo_id="AcademiaSD/Krea-2-NF4-for-LoRA-Training"
+        repo_id=HF_REPO_ID
     )
+
+    ensure_custom_prompt_encoded()
 
     print("Loading Krea-2 Transformer... / Cargando Transformer de Krea-2...")
 
@@ -527,7 +1094,6 @@ def train_krea2():
         prog = (step - WARMUP_STEPS) / max(1, TOTAL_STEPS - WARMUP_STEPS)
         return LR * (MIN_LR_RATIO + (1 - MIN_LR_RATIO) * 0.5 * (1 + math.cos(math.pi * prog)))
 
-    # ── RESTAURACIÓN EXACTA DE CHECKPOINT / CHECKPOINT RESUME ─────────────────
     start_step = 0
     lora_weights_path = os.path.join(RESUME_DIR, "adapter_model.safetensors")
     if os.path.exists(STEP_FILE) and os.path.exists(OPT_FILE) and os.path.exists(lora_weights_path):
@@ -593,6 +1159,14 @@ def train_krea2():
         cache_data[nombre] = (lat, emb, msk)
         buckets[(lat.shape[2], lat.shape[3])].append(nombre)
 
+    if os.path.exists(f"{CACHE_DIR}/_custom_embed.pt"):
+        first_ref = list(cache_data.values())[0][0]
+        c_emb = torch.load(f"{CACHE_DIR}/_custom_embed.pt", weights_only=True).to(torch.bfloat16)
+        c_msk = torch.load(f"{CACHE_DIR}/_custom_mask.pt",  weights_only=True).bool()
+        if pin:
+            c_emb, c_msk = c_emb.pin_memory(), c_msk.pin_memory()
+        cache_data["_custom"] = (first_ref, c_emb, c_msk)
+
     neg = None
     if os.path.exists(f"{CACHE_DIR}/_neg_embed.pt"):
         neg = (torch.load(f"{CACHE_DIR}/_neg_embed.pt", weights_only=True),
@@ -605,10 +1179,12 @@ def train_krea2():
             pos_cache[key] = prepare_position_ids(text_len, lh // 2, lw // 2, "cuda")
         return pos_cache[key]
 
-    all_preview_names = sorted(cache_data.keys())
+    all_preview_names = sorted(k for k in cache_data.keys() if not k.startswith("_"))
 
     def get_preview_sample(step):
-        if PREVIEW_CAPTION_MODE == "random":
+        if PREVIEW_CAPTION_MODE == "custom" and "_custom" in cache_data:
+            return "_custom"
+        elif PREVIEW_CAPTION_MODE == "random":
             return random.choice(all_preview_names)
         elif PREVIEW_CAPTION_MODE == "rotate4":
             idx = (step // max(1, PREVIEW_EVERY)) % min(4, len(all_preview_names))
@@ -617,7 +1193,7 @@ def train_krea2():
             return all_preview_names[0]
 
     running_loss, t_step_avg = 0.0, 0.0
-    print(f"\nSTARTING TRAINING / ¡ARRANCANDO ENTRENAMIENTO! {len(cache_data)} images in {len(buckets)} buckets.")
+    print(f"\nSTARTING TRAINING / ¡ARRANCANDO ENTRENAMIENTO! {len(all_preview_names)} images in {len(buckets)} buckets.")
 
     try:
         for step in range(start_step + 1, TOTAL_STEPS + 1):
