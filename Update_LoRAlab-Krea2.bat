@@ -4,7 +4,6 @@ setlocal EnableExtensions EnableDelayedExpansion
 title AcademiaSD - Krea-2 LoRA Trainer Updater
 color 0B
 
-:: Asegurar que trabajamos en la carpeta donde esta guardado este archivo
 cd /d "%~dp0"
 
 echo ================================================================
@@ -14,7 +13,7 @@ echo   [ES] Utilidad de Actualizacion del Repositorio
 echo ================================================================
 echo.
 
-rem 1. Comprobar si Git esta instalado
+rem 1. Check Git
 where git >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Git is not installed or not available in PATH.
@@ -27,7 +26,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-rem 2. Si no existe .git (instalacion ZIP), inicializar
+rem 2. Check .git
 if not exist ".git" (
     echo [INFO] Initializing Git repository...
     echo [INFO] Inicializando repositorio Git...
@@ -36,20 +35,20 @@ if not exist ".git" (
     git remote add origin https://github.com/AcademiaSD/AcademiaSD_LoRAlab-Krea2.git >nul 2>&1
 )
 
-rem 3. Asegurar la URL remota correcta
+rem 3. Ensure remote URL
 git remote set-url origin https://github.com/AcademiaSD/AcademiaSD_LoRAlab-Krea2.git >nul 2>&1
 
 echo [EN] Syncing latest updates from GitHub...
 echo [ES] Sincronizando ultimas actualizaciones desde GitHub...
 echo.
 
-rem 4. Descargar cambios de GitHub
+rem 4. Fetch changes
 git fetch origin main >nul 2>&1
 if errorlevel 1 (
     git fetch origin master >nul 2>&1
 )
 
-rem 5. Forzar sincronizacion para evitar conflictos de archivos no rastreados
+rem 5. Force reset
 git checkout -f main >nul 2>&1
 if errorlevel 1 (
     git checkout -f master >nul 2>&1
@@ -64,6 +63,7 @@ if errorlevel 1 (
     echo.
     echo [ERROR] Failed to update repository from GitHub.
     echo [ERROR] No se pudo actualizar el repositorio desde GitHub.
+    echo.
     pause
     exit /b 1
 )
