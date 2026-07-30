@@ -161,7 +161,7 @@ AcademiaSD_Krea2_LoRAlab/
 
 ## 💬 Community & Support
 
-Join the **AcademiaSD** community to learn more about AI, Stable Diffusion, Flux, and Krea!
+Join the **AcademiaSD** community to learn more about local image and video AI.!
 
 - ▶ **YouTube**: [youtube.com/@Academia_SD](https://www.youtube.com/@Academia_SD)
 - 𝕏 **X (Twitter)**: [twitter.com/Academia_S_D](https://twitter.com/Academia_S_D)
