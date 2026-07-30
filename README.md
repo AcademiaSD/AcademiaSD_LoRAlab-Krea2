@@ -92,23 +92,20 @@ Here is the exact architectural breakdown of how this is achieved:
 
 ## 📦 Installation
 
-1. **Clone the repository**:
+1. **Clone or download the repository**:
    ```bash
-   git clone https://github.com/your-username/AcademiaSD-Krea2-LoRAlab.git
+   git clone https://github.com/AcademiaSD/AcademiaSD-Krea2-LoRAlab.git
    cd AcademiaSD-Krea2-LoRAlab
    ```
 
-2. **Create and activate a virtual environment**:
-   ```bash
-   python -m venv venv
-   .\venv\Scripts\activate
-   ```
+2. **Install virtual environment & dependencies**:
+   Double-click `Install_LoRAlab-Krea2.bat` to automatically set up the Python virtual environment (`venv`) and install all required core libraries.
 
-3. **Install dependencies**:
-   ```bash
-   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-   pip install diffusers peft bitsandbytes safetensors huggingface_hub flask psutil Pillow
-   ```
+3. **(Optional) Install Triton & SageAttention 2.2**:
+   Double-click `Install_Triton&SageAtten220.bat` to install Triton and SageAttention 2.2 for enhanced attention speedup and memory optimization.
+
+4. **Update the application**:
+   You can check for and apply updates at any time by running `Update_LoRAlab-Krea2.bat`.
 
 ---
 
