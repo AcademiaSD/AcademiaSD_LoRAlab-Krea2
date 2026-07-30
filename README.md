@@ -132,7 +132,7 @@ The server will start, and your web browser will automatically open `http://127.
 2. Click **Start / Resume**.
 3. You can stop training at any time by clicking **Stop Training**; exact step state will be saved automatically for seamless resuming.
 
-### 4. Export to WebUI
+### 4. Export to ComfyUI / WebUI
 1. Enter your preferred **Final LoRA Filename** (e.g., `my_character.safetensors`).
 2. Select your ComfyUI / Forge / A1111 `models/loras` directory using **Browse / Explorar**.
 3. Click **🚀 Send to Models**.
