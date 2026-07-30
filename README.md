@@ -148,6 +148,7 @@ AcademiaSD_Krea2_LoRAlab/
 ├── server.py                   # Flask backend web server
 ├── trainer_ui.html             # HTML5 / CSS3 / JS Web GUI
 ├── Run_LoRAlab-Krea2.bat       # Windows 1-click launcher
+├── Update_LoRAlab-Krea2.bat    # Updater
 ├── pre_cache_settings.json     # Active pre-cache configuration
 ├── train_settings.json         # Active training configuration
 └── HF_token.json               # Optional Hugging Face access token
