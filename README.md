@@ -1,14 +1,10 @@
 # AcademiaSD LoRAlab-Krea2 Beta v0.75
 
-![AcademiaSD_LoRAlab-Krea2](assets/portada.jpg)
-
-![Interface](assets/interface.jpg)
-
 code
 Markdown
-# AcademiaSD Krea2 LoRAlab
+# AcademiaSD Krea2 LoRAlab Beta v0.76
 
-![AcademiaSD Krea2 LoRAlab Banner](assets/banner.png)
+![AcademiaSD_LoRAlab-Krea2](assets/portada.jpg)
 
 <p align="center">
   <b>An ultra-fast, low-resource Web GUI & pipeline for training Krea-2 (NF4) LoRAs.</b>
