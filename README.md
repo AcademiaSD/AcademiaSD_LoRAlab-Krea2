@@ -1,7 +1,4 @@
-# AcademiaSD LoRAlab-Krea2 Beta v0.75
 
-code
-Markdown
 # AcademiaSD Krea2 LoRAlab Beta v0.76
 
 ![AcademiaSD_LoRAlab-Krea2](assets/portada.jpg)
