@@ -99,8 +99,8 @@ For Linux and Mac, please consult: https://github.com/xd43vild69/AcademiaSD_LoRA
 
 1. **Clone or download the repository**:
    ```bash
-   git clone https://github.com/AcademiaSD/AcademiaSD-Krea2-LoRAlab.git
-   cd AcademiaSD-Krea2-LoRAlab
+   git clone https://github.com/AcademiaSD/AcademiaSD_LoRAlab-Krea2.git
+   cd AcademiaSD_LoRAlab-Krea2
    ```
 
 2. **Install virtual environment & dependencies**:
