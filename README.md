@@ -65,6 +65,7 @@ Here is the exact architectural breakdown of how this is achieved:
 
 - **🌐 Modern Web GUI**: Control pre-caching, dataset editing, training, checkpointing, and model export from a sleek single-page web app powered by Flask.
 - **🚀 1-Click Auto Launch**: Double-click `Run_LoRAlab-Krea2.bat` to automatically launch the server and open `http://127.0.0.1:5000` in your default browser.
+- **🖼️ Fast previews with Turbo Lora.
 - **📊 Real-Time Hardware Telemetry**:
   - System **RAM** usage.
   - Physical **GPU VRAM** usage (via `nvidia-smi` / `torch`).
