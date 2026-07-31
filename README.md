@@ -88,6 +88,7 @@ Here is the exact architectural breakdown of how this is achieved:
 | Requirement | Minimum | Recommended |
 | :--- | :--- | :--- |
 | **OS** | Windows 10/11 or Linux | Windows 11 / Ubuntu 22.04 |
+For Linux and Mac, please consult: https://github.com/xd43vild69/AcademiaSD_LoRAlab-Krea2
 | **GPU** | NVIDIA GPU with **8 GB VRAM** | NVIDIA GPU with **12 GB–24 GB VRAM** |
 | **Python** | Python 3.10+ (inside `venv`) | Python 3.10 / 3.11 |
 | **CUDA Toolkit** | CUDA 11.8 or 12.1+ | CUDA 12.1+ |
