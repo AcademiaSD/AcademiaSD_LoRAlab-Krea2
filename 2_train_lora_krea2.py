@@ -12,8 +12,9 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn.functional as F
-from diffusers import DiffusionPipeline
-from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
+from accelerate import init_empty_weights
+from diffusers import FlowMatchEulerDiscreteScheduler, Krea2Transformer2DModel
+from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
 import bitsandbytes as bnb
 from safetensors.torch import save_file, load, load_file
 from bitsandbytes.nn import Linear4bit, Params4bit
@@ -183,7 +184,7 @@ def ensure_file_downloaded(local_path, repo_id, filename_in_repo):
     if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
         return local_path
 
-    print(f"⚠ Missing LoRA file / Archivo LoRA no encontrado: {local_path}")
+    print(f"⚠ Missing file / Archivo no encontrado: {local_path}")
     print(f"  Downloading from HF / Descargando desde Hugging Face: {filename_in_repo}")
 
     enable_hf_file_progress()
@@ -199,7 +200,7 @@ def ensure_file_downloaded(local_path, repo_id, filename_in_repo):
             local_dir_use_symlinks=False,
             token=hf_token
         )
-        print(f"✓ LoRA downloaded successfully / Descargado con éxito: {downloaded}")
+        print(f"✓ Downloaded successfully / Descargado con éxito: {downloaded}")
         return downloaded
     except Exception as e:
         print(f"[!] Warning downloading {filename_in_repo} from HF: {e}")
@@ -207,14 +208,10 @@ def ensure_file_downloaded(local_path, repo_id, filename_in_repo):
 
 
 def ensure_model_downloaded(local_path, repo_id):
-    if os.path.exists(local_path) and os.path.isdir(local_path):
-        has_content = any(
-            os.path.exists(os.path.join(local_path, f))
-            for f in ["index.json", "model_index.json", "config.json"]
-        ) or len(os.listdir(local_path)) > 0
-        if has_content:
-            print(f"[OK] Local model found at / Modelo local encontrado en: {local_path}")
-            return local_path
+    if (os.path.exists(os.path.join(local_path, "index.json"))
+            and os.path.exists(os.path.join(local_path, "vae", "config.json"))):
+        print(f"[OK] Local model found at / Modelo local encontrado en: {local_path}")
+        return local_path
 
     print(f"⚠ Local model not found at / No se encontró modelo local en: {local_path}")
     print(f"  Downloading from Hugging Face / Descargando desde Hugging Face: {repo_id}")
@@ -282,128 +279,117 @@ def prepare_position_ids(text_seq_len, grid_h, grid_w, device):
     return torch.cat([text_ids, image_ids.reshape(grid_h * grid_w, 3)], dim=0)
 
 
-SKIP_QUANT = ("img_in", "time_embed", "time_mod_proj", "txt_in", "final_layer")
-
-
-def quantize_to_nf4_(module, prefix=""):
-    from bitsandbytes.nn import Linear4bit, Params4bit
-    for name, child in list(module.named_children()):
-        full = f"{prefix}.{name}" if prefix else name
-        if isinstance(child, torch.nn.Linear) and not any(s in full for s in SKIP_QUANT):
-            w = child.weight.data.float().contiguous()
-            new_layer = Linear4bit(
-                child.in_features, child.out_features,
-                bias=child.bias is not None, quant_type="nf4",
-                compute_dtype=torch.bfloat16,
-            )
-            new_layer.weight = Params4bit(w, requires_grad=False, quant_type="nf4")
-            if child.bias is not None:
-                new_layer.bias = torch.nn.Parameter(child.bias.data, requires_grad=False)
-            setattr(module, name, new_layer)
-            del child, w
-        else:
-            quantize_to_nf4_(child, full)
-
-
-def load_nf4_cache_(transformer, cache_dir):
-    index_path = os.path.join(cache_dir, "index.json")
-
+def load_nf4_transformer(model_dir):
+    """
+    Construye el Transformer vacío desde config.json y lo rellena con la caché NF4
+    (weights/ + others.safetensors). No hace falta el Transformer en BF16.
+    Builds the empty Transformer from config.json and fills it from the NF4 cache.
+    """
+    index_path = os.path.join(model_dir, "index.json")
     if not os.path.exists(index_path):
-        raise FileNotFoundError(f"index.json not found in NF4 cache / No existe index.json en caché NF4: {cache_dir}")
+        raise FileNotFoundError(f"index.json not found in NF4 cache / No existe index.json en caché NF4: {model_dir}")
 
     with open(index_path, "r", encoding="utf-8") as f:
         index = json.load(f)
 
-    quantized = index.get("quantized", {})
-    weights_dir = os.path.join(cache_dir, "weights")
-    replaced = 0
+    with init_empty_weights():
+        transformer = Krea2Transformer2DModel.from_config(Krea2Transformer2DModel.load_config(model_dir))
 
-    def get_parent_module(root, module_name):
-        parts = module_name.split(".")
-        parent = root
-        for part in parts[:-1]:
-            parent = getattr(parent, part)
-        return parent, parts[-1]
+    weights_dir = os.path.join(model_dir, "weights")
 
-    for name, info in quantized.items():
-        filepath = os.path.join(weights_dir, info["file"])
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"NF4 weight file not found / No existe archivo NF4: {filepath}")
+    def set_module(name, module):
+        parent_name, _, child_name = name.rpartition(".")
+        setattr(transformer.get_submodule(parent_name) if parent_name else transformer, child_name, module)
 
-        parent, child_name = get_parent_module(transformer, name)
-
-        with safe_open(filepath, framework="pt", device="cpu") as f:
+    for name, info in index["quantized"].items():
+        with safe_open(os.path.join(weights_dir, info["file"]), framework="pt", device="cpu") as f:
             weight_data = f.get_tensor("weight")
-            bias_data = None
-            if info.get("bias", False):
-                bias_data = f.get_tensor("bias")
+            qs_dict = {k[len("quant_state."):]: f.get_tensor(k) for k in f.keys() if k.startswith("quant_state.")}
 
-            qs_dict = {}
-            for key in f.keys():
-                if not key.startswith("quant_state."):
-                    continue
-                qs_key = key[len("quant_state."):]
-                qs_dict[qs_key] = f.get_tensor(key)
+        weight = Params4bit(weight_data, requires_grad=False, quant_type="nf4", quant_storage=torch.uint8)
+        weight.quant_state = QuantState.from_dict(qs_dict, device="cpu")
+        weight.bnb_quantized = True
 
-            packed_qs = {
-                "absmax": qs_dict["absmax"],
-                "nested_absmax": qs_dict["nested_absmax"],
-                "nested_quant_map": qs_dict["nested_quant_map"],
-                "quant_map": qs_dict["quant_map"],
-                "quant_state.bitsandbytes__nf4": qs_dict["quant_state.bitsandbytes__nf4"],
-            }
+        # En meta: nn.Linear.__init__ reservaría y rellenaría una matriz FP32 que se tira en la línea siguiente.
+        with torch.device("meta"):
+            layer = Linear4bit(info["in_features"], info["out_features"], bias=False, quant_type="nf4", compute_dtype=torch.bfloat16)
+        layer.weight = weight
+        set_module(name, layer)
 
-            quant_state = QuantState.from_dict(packed_qs, device="cpu")
+    for name, info in index["unquantized"].items():
+        with torch.device("meta"):
+            layer = torch.nn.Linear(info["in_features"], info["out_features"], bias=info["bias"], dtype=torch.bfloat16)
+        layer.load_state_dict(load_file(os.path.join(weights_dir, info["file"])), assign=True)
+        layer.requires_grad_(False)
+        set_module(name, layer)
 
-        new_weight = Params4bit(
-            weight_data,
-            requires_grad=False,
-            quant_type="nf4",
-            quant_storage=torch.uint8,
-        )
-        new_weight.quant_state = quant_state
-        new_weight.bnb_quantized = True
+    # Normas (FP32) y scale_shift_table (BF16), con los mismos dtypes que daba from_pretrained.
+    transformer.load_state_dict(load_file(os.path.join(model_dir, "others.safetensors")), strict=False, assign=True)
 
-        new_layer = Linear4bit(
-            info["in_features"],
-            info["out_features"],
-            bias=info["bias"],
-            quant_type="nf4",
-            compute_dtype=torch.bfloat16,
-        )
-        new_layer.weight = new_weight
-        if bias_data is not None:
-            new_layer.bias = torch.nn.Parameter(bias_data, requires_grad=False)
+    missing = [n for n, t in list(transformer.named_parameters()) + list(transformer.named_buffers()) if t.is_meta]
+    if missing:
+        raise RuntimeError(f"NF4 cache incomplete / Caché NF4 incompleta: {missing[:5]}")
 
-        setattr(parent, child_name, new_layer)
-        replaced += 1
-
-    print(f"Reconstructed NF4 layers / Capas NF4 reconstruidas: {replaced}")
-
-    verified = 0
-    for name, layer in transformer.named_modules():
-        if isinstance(layer, Linear4bit):
-            if getattr(layer.weight, "bnb_quantized", False):
-                if layer.weight.quant_state is not None:
-                    verified += 1
-
-    print(f"Verified NF4 layers / Capas NF4 verificadas: {verified}")
-
-    if verified != replaced:
-        raise RuntimeError("NF4 Verification mismatch / La verificación NF4 no coincide")
-
-    print("[OK] NF4 cache loaded successfully / Caché NF4 cargada correctamente.")
+    print(f"[OK] NF4 layers / Capas NF4: {len(index['quantized'])} | BF16 layers / Capas BF16: {len(index['unquantized'])}")
     return transformer
 
 
-def _export_lora(model, path):
+def build_lora_metadata(step):
+    """
+    Cabecera del .safetensors: no cambia ningún peso. Claves legibles más la convención
+    ss_* de kohya-ss, que es lo que leen CivitAI y los gestores de LoRAs para rellenar la
+    ficha. CivitAI saca las palabras de activación de ss_tag_frequency ({carpeta: {tag: veces}}).
+    """
+    meta = {
+        "format": "pt",
+        "trained_with": "AcademiaSD LoRAlab Krea2",
+        "ss_sd_model_name": "Krea-2",
+        "ss_base_model_version": "Krea-2",
+        "ss_network_module": "peft.LoraModel",
+        "ss_network_dim": LORA_RANK,
+        "ss_network_alpha": LORA_ALPHA,
+        "ss_learning_rate": LR,
+        "ss_lr_scheduler": "cosine_with_warmup",
+        "ss_lr_warmup_steps": WARMUP_STEPS,
+        "ss_max_train_steps": TOTAL_STEPS,
+        "ss_steps": step,
+        "ss_batch_size_per_device": BATCH_SIZE,
+        "ss_gradient_accumulation_steps": GRAD_ACCUM_STEPS,
+        "ss_seed": SEED,
+        "ss_mixed_precision": "bf16",
+    }
+
+    trigger = TRIGGER_WORD.strip()
+    if trigger:
+        meta["trigger_word"] = trigger
+        meta["ss_tag_frequency"] = json.dumps({"dataset": {trigger: 1}})
+    if PROJECT_NAME:
+        meta["project_name"] = PROJECT_NAME
+    meta["ss_output_name"] = PROJECT_NAME or trigger or "krea2_lora"
+
+    # La resolución la fija el pre-caché del proyecto.
+    pc_json = os.path.join(CACHE_DIR, f"pre_cache_settings_{PROJECT_NAME}.json")
+    if os.path.exists(pc_json):
+        with open(pc_json, "r", encoding="utf-8") as f:
+            area = json.load(f).get("target_area")
+        if area:
+            side = int(round(float(area) ** 0.5))
+            meta["ss_resolution"] = f"({side},{side})"
+
+    # safetensors exige que todos los valores sean str.
+    return {k: str(v) for k, v in meta.items()}
+
+
+def _export_lora(model, path, step):
+    # Formato PEFT/diffusers que carga ComfyUI. Se incluye alpha por capa: sin él,
+    # ComfyUI aplicaría el LoRA con escala 1 en lugar de alpha/rank.
     clean = {}
-    for k, v in model.state_dict().items():
-        if "lora_" not in k:
-            continue
-        new_key = "transformer." + k.replace("base_model.model.", "")
-        clean[new_key] = v.to(torch.bfloat16).cpu().contiguous()
-    save_file(clean, path, metadata={"format": "pt"})
+    for k, v in get_peft_model_state_dict(model).items():
+        k = "transformer." + k.replace("base_model.model.", "")
+        clean[k] = v.to(torch.bfloat16).cpu().contiguous()
+        if k.endswith(".lora_A.weight"):
+            clean[k[:-len(".lora_A.weight")] + ".alpha"] = torch.tensor(float(LORA_ALPHA))
+    save_file(clean, path, metadata=build_lora_metadata(step))
 
 
 class VaeHolder:
@@ -952,7 +938,15 @@ def run_preview(model, scheduler, embed, mask, neg, size, step, shift_cfg):
             lat = unpack_latents(latents, H // 8, W // 8).to(vae.dtype).unsqueeze(2)
             mean = torch.tensor(vae.config.latents_mean, device=device, dtype=lat.dtype).view(1, -1, 1, 1, 1)
             std  = torch.tensor(vae.config.latents_std,  device=device, dtype=lat.dtype).view(1, -1, 1, 1, 1)
-            img = vae.decode(lat * std + mean, return_dict=False)[0][:, :, 0]
+            try:
+                img = vae.decode(lat * std + mean, return_dict=False)[0][:, :, 0]
+            except torch.OutOfMemoryError:
+                # Con 8 GB y el entrenamiento cargado no cabe entera: por mosaicos usa mucha menos VRAM,
+                # a cambio de alguna marca leve en las uniones. Sigue así el resto del run.
+                print("  ↳ Low VRAM: tiled VAE decode for previews / Poca VRAM: decodificación por mosaicos en las previews")
+                torch.cuda.empty_cache()
+                vae.enable_tiling()
+                img = vae.decode(lat * std + mean, return_dict=False)[0][:, :, 0]
             img = ((img.float() / 2 + 0.5).clamp(0, 1)[0].cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
             vae.to("cpu")
 
@@ -968,63 +962,119 @@ def run_preview(model, scheduler, embed, mask, neg, size, step, shift_cfg):
         free_vram()
 
 
-def ensure_custom_prompt_encoded():
-    if PREVIEW_CAPTION_MODE == "custom" and PREVIEW_CUSTOM_PROMPT:
-        c_emb_path = os.path.join(CACHE_DIR, "_custom_embed.pt")
-        c_msk_path = os.path.join(CACHE_DIR, "_custom_mask.pt")
-        
-        full_p = PREVIEW_CUSTOM_PROMPT
-        if TRIGGER_WORD and TRIGGER_WORD.lower() not in full_p.lower():
-            full_p = f"{TRIGGER_WORD}, {full_p}".strip(", ")
-            
-        print(f"\n[Custom Prompt] Encoding text: '{full_p}'...")
-        te_pipe = DiffusionPipeline.from_pretrained(
-            MODEL_ID,
-            transformer=None,
-            vae=None,
-            torch_dtype=torch.bfloat16,
-        ).to("cuda")
+def check_custom_prompt(has_custom):
+    """
+    El trainer no tiene text encoder (es la razón de ser del pre-cache): el prompt manual
+    lo codifica el Pre-Cache, o el servidor al pulsar Save JSON. Aquí solo se avisa si falta
+    o si el de los ajustes ya no es el codificado.
+    """
+    if PREVIEW_CAPTION_MODE != "custom":
+        return
+    if not has_custom:
+        print("\n[PREVIEW] Custom mode but the cache has no encoded prompt: set it, Save JSON and run Pre-Cache "
+              "(it only re-encodes the texts). Using the first caption meanwhile.")
+        print("[PREVIEW] Modo custom pero la caché no tiene el prompt codificado: escríbelo, Save JSON y lanza el "
+              "Pre-Caché (solo vuelve a codificar los textos). Mientras, se usa el primer caption.")
+        return
 
-        with torch.inference_mode():
-            c_emb, c_msk = te_pipe.encode_prompt(prompt=full_p, max_sequence_length=128)
-            torch.save(c_emb.cpu(), c_emb_path)
-            torch.save(c_msk.cpu(), c_msk_path)
+    wanted = PREVIEW_CUSTOM_PROMPT
+    if TRIGGER_WORD and wanted and TRIGGER_WORD.lower() not in wanted.lower():
+        wanted = f"{TRIGGER_WORD}, {wanted}"
+    prompt_file = os.path.join(CACHE_DIR, "_custom_prompt.txt")
+    encoded = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else ""
+    print(f"\n[PREVIEW] Custom prompt / Prompt manual: '{encoded}'")
+    if wanted and wanted != encoded:
+        print("[PREVIEW] The new prompt is being encoded on CPU (Save JSON); previews switch to it when ready.")
+        print("[PREVIEW] El prompt nuevo se está codificando en CPU (Save JSON); las previews lo usarán en cuanto esté.")
 
-        del te_pipe
-        free_vram()
-        print("  ✓ Custom Prompt encoded and ready for previews.")
+
+_live_mtime = None
+
+
+def reload_live_settings():
+    """
+    Ajustes en caliente: si train_settings.json ha cambiado (la GUI lo reescribe con
+    Save JSON aunque el entrenamiento esté en marcha), aplica la lista de abajo en el
+    paso siguiente. El coste por paso es un getmtime. Rank, alpha, batch, resolución y
+    carpetas se fijan al arrancar y siguen necesitando Stop -> Resume.
+    """
+    global _live_mtime, TOTAL_STEPS, SAVE_EVERY, LR, MAX_GRAD_NORM
+    global PREVIEW_EVERY, PREVIEW_STEPS, PREVIEW_CFG, PREVIEW_CAPTION_MODE, PREVIEW_CUSTOM_PROMPT
+    global USE_TURBO, TURBO_LORA_STRENGTH, USE_FILTER_BYPASS, FILTER_BYPASS_STRENGTH, SEED
+
+    try:
+        mtime = os.path.getmtime(CONFIG_PATH)
+    except OSError:
+        return []
+    if _live_mtime is None or mtime == _live_mtime:
+        # La primera llamada solo memoriza la fecha: el guardado previo al lanzamiento no es un cambio.
+        _live_mtime = _live_mtime or mtime
+        return []
+
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return []  # guardado a medias: se vuelve a intentar en el paso siguiente
+    _live_mtime = mtime
+
+    changes = []
+
+    def fresh(key, cast, current):
+        if key not in raw:
+            return current
+        try:
+            value = cast(raw[key])
+        except (TypeError, ValueError):
+            return current
+        if value != current:
+            changes.append(f"{key}: {current} -> {value}")
+        return value
+
+    TOTAL_STEPS            = fresh("total_steps",            int,   TOTAL_STEPS)
+    SAVE_EVERY             = fresh("save_every",             int,   SAVE_EVERY)
+    LR                     = fresh("lr",                     float, LR)
+    MAX_GRAD_NORM          = fresh("max_grad_norm",          float, MAX_GRAD_NORM)
+    PREVIEW_EVERY          = fresh("preview_every",          int,   PREVIEW_EVERY)
+    PREVIEW_STEPS          = fresh("preview_steps",          int,   PREVIEW_STEPS)
+    PREVIEW_CFG            = fresh("preview_cfg",            float, PREVIEW_CFG)
+    PREVIEW_CAPTION_MODE   = fresh("preview_caption_mode",   str,   PREVIEW_CAPTION_MODE)
+    PREVIEW_CUSTOM_PROMPT  = fresh("preview_custom_prompt",  lambda v: str(v).strip(), PREVIEW_CUSTOM_PROMPT)
+    USE_TURBO              = fresh("use_turbo",              bool,  USE_TURBO)
+    TURBO_LORA_STRENGTH    = fresh("turbo_lora_strength",    float, TURBO_LORA_STRENGTH)
+    USE_FILTER_BYPASS      = fresh("use_filter_bypass",      bool,  USE_FILTER_BYPASS)
+    FILTER_BYPASS_STRENGTH = fresh("filter_bypass_strength", float, FILTER_BYPASS_STRENGTH)
+    SEED                   = fresh("seed",                   int,   SEED)  # solo previews
+    return changes
 
 
 def train_krea2():
+    global LORA_RANK, LORA_ALPHA  # al reanudar se toman del checkpoint (el alpha se exporta con el LoRA)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
 
     if not os.path.exists(CACHE_DIR) or not any(f.endswith("_latent.pt") for f in os.listdir(CACHE_DIR)):
         print(f"\n[!] ERROR: Cache directory '{CACHE_DIR}' is empty or does not exist.")
         print(f"[!] Please run Pre-Cache first! / ¡Por favor ejecuta el Pre-Caché primero!")
-        return
+        sys.exit(2)  # la GUI muestra este código como "falta la pre-caché"
 
     ensure_model_downloaded(
         local_path=MODEL_ID,
         repo_id=HF_REPO_ID
     )
 
-    ensure_custom_prompt_encoded()
+    # Instalaciones anteriores traían el Transformer en BF16 en vez de others.safetensors.
+    ensure_file_downloaded(os.path.join(MODEL_ID, "others.safetensors"), HF_REPO_ID, "others.safetensors")
 
-    print("Loading Krea-2 Transformer... / Cargando Transformer de Krea-2...")
-
-    pipe = DiffusionPipeline.from_pretrained(
-        MODEL_ID,
-        vae=None,
-        text_encoder=None,
-        torch_dtype=torch.bfloat16,
-    )
-
-    transformer = pipe.transformer
-    scheduler   = pipe.scheduler
-
-    del pipe
+    print("Loading Krea-2 Transformer (NF4)... / Cargando Transformer de Krea-2 (NF4)...")
+    t0 = time.time()
+    transformer = load_nf4_transformer(MODEL_ID)
+    print(f"[NF4] Loaded in / Cargado en {time.time() - t0:.1f}s", flush=True)
+    transformer.to("cuda")
     free_vram()
+    print(f"Transformer 12B pinned in VRAM. Usage / Uso: {torch.cuda.memory_allocated()/1e9:.1f} GB", flush=True)
+
+    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(MODEL_ID, subfolder="scheduler")
 
     shift_cfg = (
         scheduler.config.get("base_image_seq_len", 256),
@@ -1033,29 +1083,28 @@ def train_krea2():
         scheduler.config.get("max_shift", 1.15),
     )
 
-    NF4_CACHE_DIR = MODEL_ID
-
-    if os.path.exists(os.path.join(NF4_CACHE_DIR, "index.json")):
-        print("\n¡NF4 CACHE DETECTED! / ¡CACHÉ NF4 DETECTADA!")
-        print("Skipping NF4 quantization... / No se ejecutará cuantización NF4.")
-        t0 = time.time()
-        transformer = load_nf4_cache_(transformer, NF4_CACHE_DIR)
-        print(f"[NF4] Cache loaded in / Caché cargada en {time.time() - t0:.1f}s", flush=True)
-        transformer.to("cuda")
-        free_vram()
-        print(f"Transformer 12B pinned in VRAM. Usage / Uso: {torch.cuda.memory_allocated()/1e9:.1f} GB", flush=True)
-    else:
-        print("\nNo NF4 cache found. Performing quantization... / No se encontró caché NF4. Ejecutando cuantización...")
-        quantize_to_nf4_(transformer)
-        transformer.to("cuda")
-        free_vram()
-        print(f"Transformer 12B pinned in VRAM. Usage / Uso: {torch.cuda.memory_allocated()/1e9:.1f} GB")
-
     transformer.enable_gradient_checkpointing()
 
     target_modules = [name for name, m in transformer.named_modules()
                       if isinstance(m, (torch.nn.Linear, bnb.nn.Linear4bit))]
     print(f"Target LoRA Layers / Capas LoRA objetivo: {len(target_modules)}")
+
+    # Reanudar es continuar EL MISMO LoRA: capas, rank y alpha salen del checkpoint, no de la GUI.
+    # Si se construyera con otros, el optimizador no encajaría y quedaría una mezcla de pesos.
+    # Las capas se leen de los PESOS guardados: adapter_config.json las guarda abreviadas.
+    resume_weights = os.path.join(RESUME_DIR, "adapter_model.safetensors")
+    if os.path.exists(STEP_FILE) and os.path.exists(resume_weights):
+        with safe_open(resume_weights, framework="pt", device="cpu") as f:
+            saved_targets = sorted({k.split(".lora_")[0].replace("base_model.model.", "", 1) for k in f.keys()})
+        with open(os.path.join(RESUME_DIR, "adapter_config.json"), "r", encoding="utf-8") as f:
+            saved_cfg = json.load(f)
+        saved = (len(saved_targets), saved_cfg["r"], saved_cfg["lora_alpha"])
+        if saved != (len(target_modules), LORA_RANK, LORA_ALPHA):
+            print(f"\n[!] Resuming with the checkpoint's LoRA: {saved[0]} layers, rank {saved[1]}, alpha {saved[2]} "
+                  f"(settings ask for {len(target_modules)} layers, rank {LORA_RANK}, alpha {LORA_ALPHA}; they apply to new trainings).")
+            print(f"[!] Se reanuda con el LoRA del checkpoint: {saved[0]} capas, rank {saved[1]}, alpha {saved[2]} "
+                  f"(los ajustes piden {len(target_modules)} capas, rank {LORA_RANK}, alpha {LORA_ALPHA}; se aplican a entrenamientos nuevos).")
+        target_modules, LORA_RANK, LORA_ALPHA = saved_targets, saved[1], saved[2]
 
     lora_config = LoraConfig(
         r=LORA_RANK, lora_alpha=LORA_ALPHA, lora_dropout=0.0,
@@ -1123,7 +1172,7 @@ def train_krea2():
         with open(STEP_FILE, "w", encoding="utf-8") as f:
             f.write(str(current_s))
         ckpt = os.path.join(OUTPUT_DIR, f"Krea2_LoRA_step_{current_s}.safetensors")
-        _export_lora(model, ckpt)
+        _export_lora(model, ckpt, current_s)
         print(f"✓ Checkpoint saved successfully at step / Checkpoint guardado en paso {current_s}: {ckpt}")
 
     def handle_signal(sig, frame):
@@ -1159,13 +1208,19 @@ def train_krea2():
         cache_data[nombre] = (lat, emb, msk)
         buckets[(lat.shape[2], lat.shape[3])].append(nombre)
 
-    if os.path.exists(f"{CACHE_DIR}/_custom_embed.pt"):
-        first_ref = list(cache_data.values())[0][0]
+    def load_custom():
+        # El prompt manual no tiene imagen: la preview toma el tamaño de la primera muestra.
+        first_ref = next(v[0] for k, v in cache_data.items() if not k.startswith("_"))
         c_emb = torch.load(f"{CACHE_DIR}/_custom_embed.pt", weights_only=True).to(torch.bfloat16)
         c_msk = torch.load(f"{CACHE_DIR}/_custom_mask.pt",  weights_only=True).bool()
         if pin:
             c_emb, c_msk = c_emb.pin_memory(), c_msk.pin_memory()
         cache_data["_custom"] = (first_ref, c_emb, c_msk)
+
+    if os.path.exists(f"{CACHE_DIR}/_custom_embed.pt"):
+        load_custom()
+    check_custom_prompt("_custom" in cache_data)
+    custom_mtime = [os.path.getmtime(f"{CACHE_DIR}/_custom_embed.pt") if "_custom" in cache_data else None]
 
     neg = None
     if os.path.exists(f"{CACHE_DIR}/_neg_embed.pt"):
@@ -1195,9 +1250,24 @@ def train_krea2():
     running_loss, t_step_avg = 0.0, 0.0
     print(f"\nSTARTING TRAINING / ¡ARRANCANDO ENTRENAMIENTO! {len(all_preview_names)} images in {len(buckets)} buckets.")
 
+    reload_live_settings()
+    step = start_step
     try:
-        for step in range(start_step + 1, TOTAL_STEPS + 1):
+        # while y no range(): TOTAL_STEPS puede cambiar en caliente, en ambos sentidos.
+        while step < TOTAL_STEPS:
+            step += 1
             last_step_executed = step
+
+            changes = reload_live_settings()
+            if changes:
+                print("\n[LIVE] Settings reloaded without stopping / Ajustes recargados sin parar:")
+                for c in changes:
+                    print(f"[LIVE]   {c}")
+                if any(c.startswith(("preview_custom_prompt", "preview_caption_mode")) for c in changes):
+                    check_custom_prompt("_custom" in cache_data)
+                if step > TOTAL_STEPS:
+                    break
+
             t0 = time.time()
 
             size = random.choice(list(buckets))
@@ -1255,11 +1325,17 @@ def train_krea2():
             )
             print(f"\r{progress_line}", end="", flush=True)
 
-            if step % SAVE_EVERY == 0:
+            if SAVE_EVERY > 0 and step % SAVE_EVERY == 0:
                 print()
                 save_checkpoint_now(step)
 
             if PREVIEW_EVERY > 0 and step % PREVIEW_EVERY == 0:
+                # El servidor codifica en CPU los prompts nuevos: aquí solo se relee el embedding si cambió.
+                custom_path = f"{CACHE_DIR}/_custom_embed.pt"
+                if os.path.exists(custom_path) and os.path.getmtime(custom_path) != custom_mtime[0]:
+                    custom_mtime[0] = os.path.getmtime(custom_path)
+                    load_custom()
+                    check_custom_prompt(True)
                 p_name = get_preview_sample(step)
                 lat0, emb0, msk0 = cache_data[p_name]
                 print(f"\n  [Preview] Mode: {PREVIEW_CAPTION_MODE} | Sample: {p_name}")
@@ -1272,7 +1348,7 @@ def train_krea2():
 
     print("\n\nTraining completed! / ¡Entrenamiento finalizado!")
     final = os.path.join(OUTPUT_DIR, "Krea2_FINAL_LoRA.safetensors")
-    _export_lora(model, final)
+    _export_lora(model, final, min(last_step_executed, TOTAL_STEPS))
     print(f"✓ Final LoRA saved to / Tu LoRA definitivo está en: {final}")
 
 

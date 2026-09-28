@@ -1,0 +1,14 @@
+# Modelo y entorno / Model and environment
+Krea-2-NF4/
+venv/
+__pycache__/
+
+# Ejecuciones / Runs
+cached_data_*/
+krea2_lora_output*/
+
+# Ajustes y credenciales / Settings and credentials
+pre_cache_settings.json
+train_settings.json
+caption_settings.json
+HF_token.json

@@ -1,5 +1,5 @@
 
-# AcademiaSD Krea2 LoRAlab Beta v0.76
+# AcademiaSD Krea2 LoRAlab Beta v0.93
 
 ![AcademiaSD_LoRAlab-Krea2](assets/portada.jpg)
 
@@ -71,12 +71,15 @@ Here is the exact architectural breakdown of how this is achieved:
   - Physical **GPU VRAM** usage (via `nvidia-smi` / `torch`).
   - **GPU Temperature (°C)** with dynamic color coding (Green <70°C, Orange 70–79°C, Red >80°C).
 - **🔑 Hugging Face Token Support**: Optional HF token management (`HF_token.json`) for faster model downloads with live progress bars (MBs, transfer speed, ETA).
-- **🖼️ Dataset Inspector & Inline Caption Editor**:
-  - Visual grid with status badges (🟢 **Green** = Caption present, 🔴 **Red** = Missing caption).
-  - Filename tags overlaid on thumbnails.
-  - Modal lightbox to view high-res images and **edit `.txt` captions directly on disk**.
-  - Batch tool to inject **Trigger Words** across all captions at once.
-- **⏱️ Exact Step Resume Checkpoints**: Interrupt or stop training at any step (e.g. Step 333); the exact state (`current_step.txt`, `optimizer.pt`, `adapter_model.safetensors`) is saved automatically. Click **Start/Resume** to continue from that exact step.
+- **✍️ Auto-Captions**: **Create Captions** writes one `.txt` per image with Qwen3-VL-4B, the Krea-2 text encoder itself (NF4, ~3.5 GB VRAM, no extra download), with the trigger word first. The prompt is editable and **Overwrite** off only fills the missing captions.
+- **🖼️ Dataset Manager & Inline Caption Editor**:
+  - Visual grid with status badges (🟢 **Green** = Caption present, 🔴 **Red** = Missing caption), resizable by dragging.
+  - Modal lightbox to view high-res images and **edit `.txt` captions directly on disk** (warns before closing with unsaved changes).
+  - Batch tool: put the **Trigger Word** first and **Append / Replace / Remove** a common text in every caption. **Clear Captions** and a per-image delete button.
+- **🔄 Live Settings**: while training, **Save JSON** applies steps, save/preview every, preview settings, prompt, turbo and LR on the next step. A new preview prompt is encoded on the CPU without stopping the training.
+- **🗑️ Delete Pre-Cache / Delete Training** buttons to empty the current project's folders.
+- **⏱️ Exact Step Resume Checkpoints**: Interrupt or stop training at any step (e.g. Step 333); the exact state (`current_step.txt`, `optimizer.pt`, `adapter_model.safetensors`) is saved automatically. Click **Start/Resume** to continue from that exact step. Resuming always keeps the checkpoint's rank and alpha.
+- **🏷️ LoRA Metadata**: exported LoRAs carry their alpha (ComfyUI applies them at the same strength as the previews) and kohya-style metadata (trigger word, rank, steps, resolution) that CivitAI and LoRA managers read.
 - **📂 Automatic Project Folder Management**: Dynamically routes cache and outputs to `./cached_data_krea2_<project>` and `./krea2_lora_output_<project>` based on your project name.
 - **🚀 One-Click WebUI Export ("Send to Models")**: Export the best `.safetensors` LoRA directly to your preferred WebUI folder (ComfyUI, Forge, Automatic1111).
 - **🌐 Fully Bilingual (English / Español)**: All buttons, console logs, dialogs, and progress bars display labels in both English and Spanish.
@@ -112,6 +115,8 @@ For Linux and Mac, please consult: https://github.com/xd43vild69/AcademiaSD_LoRA
 4. **Update the application**:
    You can check for and apply updates at any time by running `Update_LoRAlab-Krea2.bat`.
 
+> **Updating from v0.76:** the trainer now loads only the NF4 transformer. The first training downloads `Krea-2-NF4/others.safetensors` (4 MB) and you can delete the old BF16 folder `Krea-2-NF4/transformer` (~25 GB). LoRAs exported now include alpha: with alpha ≠ rank they look stronger in ComfyUI than the ones exported before, and match the previews.
+
 ---
 
 ## ⚡ Usage Guide
@@ -123,18 +128,21 @@ Run_LoRAlab-Krea2.bat
 ```
 The server will start, and your web browser will automatically open `http://127.0.0.1:5000`.
 
-### 2. Pre-Cache Dataset
-1. Enter a **Project Name** (e.g., `cherry2`).
+### 2. Captions (optional)
+1. Enter a **Project Name** (e.g., `cherry2`) and a **Trigger Word**.
 2. Select your image folder using the native Windows file requester (**Browse / Explorar**).
-3. Set your target resolution (e.g., `768x768`) and **Multiple** (`8`, `16`, `32`, or `64`).
-4. Click **Start Pre-Cache / Iniciar Pre-Caché**.
+3. In the Dataset Manager, click **Create Captions / Crear Captions** and review them before pre-caching.
 
-### 3. Train LoRA
+### 3. Pre-Cache Dataset
+1. Set your target resolution (e.g., `768x768`) and **Multiple** (`8`, `16`, `32`, or `64`).
+2. Click **Start Pre-Cache / Iniciar Pre-Caché**. Running it again only re-encodes the texts; unchanged images are skipped.
+
+### 4. Train LoRA
 1. Configure **Total Steps** (e.g., `1200`), **Learning Rate** (e.g., `0.0003`), **LoRA Rank/Alpha**, and **Save Every**.
 2. Click **Start / Resume**.
 3. You can stop training at any time by clicking **Stop Training**; exact step state will be saved automatically for seamless resuming.
 
-### 4. Export to ComfyUI / WebUI
+### 5. Export to ComfyUI / WebUI
 1. Enter your preferred **Final LoRA Filename** (e.g., `my_character.safetensors`).
 2. Select your ComfyUI / Forge / A1111 `models/loras` directory using **Browse / Explorar**.
 3. Click **🚀 Send to Models**.
@@ -148,6 +156,7 @@ AcademiaSD_Krea2_LoRAlab/
 ├── assets/
 │   ├── banner.png             # Web GUI top header banner
 │   └── logo.png               # Logo & browser favicon
+├── 0_caption_krea2.py          # Dataset auto-captioning (Qwen3-VL-4B)
 ├── 1_pre_cache_krea2.py        # Latent VAE & Text Embedding pre-caching script
 ├── 2_train_lora_krea2.py       # DiT 12B NF4 LoRA training script
 ├── server.py                   # Flask backend web server
@@ -156,6 +165,7 @@ AcademiaSD_Krea2_LoRAlab/
 ├── Update_LoRAlab-Krea2.bat    # Updater
 ├── pre_cache_settings.json     # Active pre-cache configuration
 ├── train_settings.json         # Active training configuration
+├── caption_settings.json       # Auto-caption prompt and options
 └── HF_token.json               # Optional Hugging Face access token
 ```
 

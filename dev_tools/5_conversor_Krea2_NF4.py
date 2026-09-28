@@ -15,6 +15,7 @@ El script guarda:
     - QuantState serializado con packed=True
     - bias de las capas cuantizadas
     - pesos BF16 de las capas excluidas de la cuantización
+    - others.safetensors: el resto de parámetros (normas, scale_shift_table)
     - metadata de la conversión
 
 Posteriormente el trainer podrá reconstruir el Transformer
@@ -406,6 +407,20 @@ def extract_nf4_cache(transformer, output_dir):
                 }
 
                 unquantized_count += 1
+
+    # =========================================================================
+    # RESTO DE PARÁMETROS (normas, scale_shift_table): el trainer ya no carga
+    # el Transformer en BF16, así que tienen que ir en la caché.
+    # =========================================================================
+
+    covered = set(index["quantized"]) | set(index["unquantized"])
+    others = {
+        k: v.detach().cpu().contiguous()
+        for k, v in transformer.state_dict().items()
+        if not any(k.startswith(m + ".") for m in covered)
+    }
+    save_file(others, os.path.join(output_dir, "others.safetensors"))
+    print(f"  Otros parámetros: {len(others)} tensores")
 
     # =========================================================================
     # GUARDAR INDEX
@@ -813,6 +828,10 @@ def main():
 
     print(
         "  weights/"
+    )
+
+    print(
+        "  others.safetensors"
     )
 
     print()

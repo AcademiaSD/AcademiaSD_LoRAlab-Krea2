@@ -104,6 +104,18 @@
         .ds-grid.compact { grid-template-columns: repeat(auto-fill, minmax(95px, 1fr)); }
         .ds-grid.large { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
         .ds-grid.hidden { display: none; }
+        .ds-resizer { height: 11px; margin: 2px 0 -6px 0; cursor: ns-resize; display: flex; align-items: center; justify-content: center; border-radius: 4px; touch-action: none; }
+        .ds-resizer::before { content: ""; width: 46px; height: 3px; border-radius: 2px; background: var(--panel-border); transition: background .12s; }
+        .ds-resizer:hover::before, .ds-resizer.dragging::before { background: #38bdf8; }
+        .ds-grid.hidden + .ds-resizer { display: none; }
+        .ds-caption-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0 10px 0; border-bottom: 1px solid var(--panel-border); margin-bottom: 10px; }
+        .ds-caption-prompt { flex: 1 1 100%; min-width: 260px; min-height: 76px; resize: vertical; line-height: 1.45; font-family: inherit; }
+        .ds-mode-select { flex: 0 0 auto; background: #0f172a; color: #fff; border: 1px solid var(--panel-border); border-radius: 6px; padding: 6px 8px; font-size: 0.8rem; }
+        .ds-inline-label { display: flex; align-items: center; gap: 5px; font-size: 0.74rem; color: var(--text-muted); white-space: nowrap; cursor: pointer; }
+        .ds-step-hint { font-size: 0.74rem; color: var(--text-muted); }
+        .ds-del { position: absolute; top: 6px; left: 6px; width: 22px; height: 22px; border: none; border-radius: 5px; background: rgba(15,23,42,0.82); color: #fca5a5; font-size: 0.82rem; line-height: 1; cursor: pointer; z-index: 3; opacity: 0; transition: opacity 0.15s, background 0.15s; }
+        .ds-card:hover .ds-del { opacity: 1; }
+        .ds-del:hover { background: var(--danger); color: #fff; }
 
         .ds-card { background: #0f172a; border: 1px solid var(--panel-border); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; cursor: pointer; transition: transform 0.15s, border-color 0.15s; }
         .ds-card:hover { transform: translateY(-2px); border-color: var(--accent); }
@@ -233,7 +245,7 @@
                     <div class="form-group">
                         <label>Dataset Path / Ruta del Dataset:</label>
                         <div style="display:flex; gap:8px;">
-                            <input type="text" id="dataset_path" value="./dataset" onchange="loadDatasetInfo()">
+                            <input type="text" id="dataset_path" value="./dataset" onchange="datasetPathChanged()">
                             <button type="button" class="btn btn-secondary btn-sm" onclick="browseFolderNative('dataset')">Browse / Explorar</button>
                         </div>
                     </div>
@@ -290,6 +302,10 @@
                     <button type="button" class="btn btn-primary btn-tall btn-full" id="btn-precache" onclick="runPrecache()" style="margin-top:8px;">
                         <span class="main-text">Start Pre-Cache</span>
                         <span class="sub-text">Iniciar Pre-Caché</span>
+                    </button>
+                    <button type="button" class="btn btn-danger btn-sm btn-full" onclick="deleteProjectData('precache')" style="margin-top:6px;"
+                            title="Empties this project's pre-cache folder (latents and embeddings). The dataset is NOT touched. / Vacía la carpeta de pre-caché de este proyecto (latentes y embeddings). El dataset NO se toca.">
+                        Delete Pre-Cache / Borrar Pre-Caché
                     </button>
                 </div>
             </div>
@@ -354,7 +370,7 @@
                         </div>
                     </div>
 
-                    <!-- TURBO LORA ACCELERATED PREVIEW SWITCH (MARCADO POR DEFECTO) -->
+                    <!-- TURBO LORA ACCELERATED PREVIEW SWITCH (MARCADO POR DEFECTO): 8 pasos, sin CFG -->
                     <div class="form-group" style="background: #0f172a; padding: 10px; border-radius: 8px; border: 1px solid var(--panel-border); margin-top: 6px;">
                         <div style="display: flex; align-items: center; justify-content: space-between;">
                             <label style="margin: 0; font-weight: 600; color: #38bdf8; cursor: pointer;" for="train_use_turbo">
@@ -427,6 +443,11 @@
                             <span class="sub-text">Detener</span>
                         </button>
                     </div>
+                    <div id="encode-status" style="display:none; margin-top:8px; padding:8px 10px; border:1px solid var(--warning); border-radius:6px; color:var(--warning); font-size:0.85rem;"></div>
+                    <button type="button" class="btn btn-danger btn-sm btn-full" onclick="deleteProjectData('training')" style="margin-top:6px;"
+                            title="Empties this project's output folder: LoRA checkpoints, resume point and previews. The pre-cache and the dataset are NOT touched. / Vacía la carpeta de salida de este proyecto: checkpoints del LoRA, punto de reanudación y previews. La pre-caché y el dataset NO se tocan.">
+                        Delete Training / Borrar Entrenamiento
+                    </button>
                 </div>
             </div>
 
@@ -468,21 +489,50 @@
             
             <div class="terminal" id="terminal"></div>
 
-            <!-- Dataset Inspector -->
+            <!-- Dataset Manager -->
             <div>
                 <div class="panel-title" style="cursor:default;">
-                    <span>Dataset Inspector / Inspector (<span id="ds-count">0</span> img, <span id="ds-txt-count">0</span> txt)</span>
+                    <span>Dataset Manager / Gestor (<span id="ds-count">0</span> img, <span id="ds-txt-count">0</span> txt)</span>
                     <div class="ds-toolbar">
                         <input type="text" class="ds-search" id="ds-search" placeholder="Search / Buscar..." oninput="filterDatasetGrid()">
                         <button type="button" class="btn btn-secondary btn-sm" onclick="setGridMode('compact')">Compact / Pequeño</button>
                         <button type="button" class="btn btn-secondary btn-sm" onclick="setGridMode('normal')">Normal</button>
                         <button type="button" class="btn btn-secondary btn-sm" onclick="setGridMode('large')">Expand / Grande</button>
                         <button type="button" class="btn btn-secondary btn-sm" id="btn-toggle-ds" onclick="toggleDatasetGrid()">Hide / Ocultar</button>
-                        <button type="button" class="btn btn-warning btn-sm" onclick="addTriggerToAllCaptions()">+ Trigger All</button>
+                        <select class="ds-mode-select" id="ds-common-mode"
+                                title="What to do with the common text. Append adds it at the end of every caption (twice does not duplicate it), Replace writes only this text, Remove takes it out of every caption (undoes a wrong trigger). / Qué hacer con el texto común. Añadir lo pone al final de cada caption (dos veces no lo duplica), Reemplazar escribe solo este texto, Quitar lo elimina de todos los captions (deshace un trigger equivocado).">
+                            <option value="append">Append / Añadir</option>
+                            <option value="replace">Replace / Reemplazar</option>
+                            <option value="remove">Remove / Quitar</option>
+                        </select>
+                        <input type="text" class="ds-search" id="ds-common-caption" style="min-width:220px;"
+                               placeholder="Common text / Texto común (optional / opcional)"
+                               title="Leave it empty and Apply to All only puts the trigger word first where it is missing. / Déjalo vacío y Aplicar a todos solo pone la palabra clave al principio donde falte.">
+                        <button type="button" class="btn btn-warning btn-sm" onclick="addTriggerToAllCaptions()">Apply to All / Aplicar a todos</button>
+                        <button type="button" class="btn btn-danger btn-sm" onclick="clearAllCaptions()"
+                                title="Deletes the .txt of every image. There is no undo. / Borra el .txt de todas las imágenes. No hay deshacer.">Clear Captions / Borrar</button>
                         <button type="button" class="btn btn-secondary btn-sm" onclick="loadDatasetInfo()">Refresh / Actualizar</button>
                     </div>
                 </div>
+
+                <!-- Auto-caption con Qwen3-VL-4B: es el propio text encoder de Krea-2, no descarga nada. -->
+                <div class="ds-caption-bar">
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-caption" onclick="runCaption()"
+                            title="Writes one .txt per image with Qwen3-VL-4B, the text encoder of Krea-2 itself (NF4, ~3.5 GB VRAM), with the trigger word first. No extra download. / Escribe un .txt por imagen con Qwen3-VL-4B, el propio text encoder de Krea-2 (NF4, ~3.5 GB de VRAM), con la palabra clave delante. Sin descargas extra.">
+                        <span id="btn-caption-label">Create Captions / Crear Captions</span>
+                    </button>
+                    <span class="ds-step-hint">Qwen3-VL-4B · before Pre-Cache / antes del Pre-Caché</span>
+                    <label class="ds-inline-label" title="Off = only images with no caption are processed. / Desactivado = solo se procesan las imágenes sin caption.">
+                        <input type="checkbox" id="caption_overwrite" checked>
+                        Overwrite / Rehacer
+                    </label>
+                    <textarea class="ds-search ds-caption-prompt" id="caption_prompt_text" rows="4"
+                              placeholder="Prompt for the captioner / Prompt para el generador"></textarea>
+                </div>
+
                 <div class="ds-grid" id="ds-grid"></div>
+                <div class="ds-resizer" id="ds-resizer"
+                     title="Drag to make the grid taller or shorter. Double-click to reset. / Arrastra para hacer la rejilla más alta o más baja. Doble clic para restablecer."></div>
             </div>
 
             <!-- Previews -->
@@ -494,7 +544,7 @@
     </div>
 
     <!-- Modal: Edit Caption & Inspection -->
-    <div class="modal" id="modal" onclick="closeModal(event)">
+    <div class="modal" id="modal" onmousedown="modalOverlayDown(event)" onclick="modalOverlayClick(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <h3 id="modal-filename" style="font-size:1rem;">Filename</h3>
@@ -794,7 +844,7 @@
                 if (data.status === 'ok' && data.path) {
                     if (target === 'dataset') {
                         document.getElementById('dataset_path').value = data.path;
-                        loadDatasetInfo();
+                        datasetPathChanged();
                     } else if (target === 'export') {
                         document.getElementById('export_models_dir').value = data.path;
                     }
@@ -806,7 +856,13 @@
             }
         }
 
-        async function savePrecacheSettings() {
+        // El servidor lee la ruta del dataset de pre_cache_settings.json: hay que guardarla ANTES de
+        // refrescar el Dataset Manager, o seguiría mostrando la carpeta anterior.
+        async function datasetPathChanged() {
+            await savePrecacheSettings(true);
+        }
+
+        async function savePrecacheSettings(silent = false) {
             const proj = document.getElementById('project_name').value.trim();
             const precacheData = {
                 project_name: proj,
@@ -823,7 +879,8 @@
             const data = await res.json();
             if (data.status === 'ok') {
                 const listStr = data.all_saved ? data.all_saved.join('\n • ') : data.file;
-                alert(`✓ Pre-Cache Settings saved / Configuración Pre-Caché guardada en:\n • ${listStr}`);
+                if (!silent) alert(`✓ Pre-Cache Settings saved / Configuración Pre-Caché guardada en:\n • ${listStr}`);
+                loadDatasetInfo();
             }
         }
 
@@ -857,10 +914,19 @@
             };
             const res = await fetch('/api/save-train', { method: 'POST', body: JSON.stringify(trainData) });
             const data = await res.json();
+            setEncodingState(data.encoding, data.encoding_device);
             if (data.status === 'ok') {
                 const listStr = data.all_saved ? data.all_saved.join('\n • ') : data.file;
-                alert(`✓ Train Settings saved / Configuración de Entrenamiento guardada en:\n • ${listStr}`);
+                // Con el entrenamiento en marcha, el trainer aplica los ajustes en caliente en el paso siguiente.
+                const live = document.getElementById('status-badge').classList.contains('badge-running')
+                    ? '\n\nTraining is running: steps, save/preview every, preview settings, caption mode, prompt, turbo and LR apply on the next step. Rank, alpha, batch and resolution need Stop -> Resume.\nEl entrenamiento está en marcha: pasos, guardar/preview cada, ajustes de preview, modo, prompt, turbo y LR se aplican en el paso siguiente. Rank, alpha, batch y resolución necesitan Detener -> Reanudar.'
+                    : '';
+                const encoding = data.encoding
+                    ? `\n\nThe preview prompt is being encoded on ${data.encoding_device}. Start/Resume and Stop are disabled until it finishes.\nSe está codificando en ${data.encoding_device} el prompt de la preview. Iniciar/Reanudar y Detener quedan desactivados hasta que termine.`
+                    : '';
+                alert(`✓ Train Settings saved / Configuración de Entrenamiento guardada en:\n • ${listStr}${live}${encoding}`);
             }
+            return data;
         }
 
         async function checkCheckpointInfo() {
@@ -878,13 +944,28 @@
 
         function appendTerminal(text, replace = false, extraClass = '') {
             const term = document.getElementById('terminal');
-            if (replace && term.lastElementChild) {
-                term.lastElementChild.innerText = text;
-                if (extraClass) term.lastElementChild.className = `terminal-line ${extraClass}`;
+            // Barras de progreso con nombre ("Fetching 256 files: 26%|..."): varias a la vez (descargas) se
+            // actualizan cada una en su línea en vez de apilarse.
+            const bar = extraClass ? null : text.match(/^\s*([^:|\[]{3,60}):.*(\d%\||█|\| [\d.]+[kMGT]?B$)/);
+            const label = bar ? bar[1].trim() : '';
+            if (label) {
+                const same = [...term.children].slice(-8).find(el => el.dataset.bar === label);
+                if (same) {
+                    same.innerText = text;
+                    term.scrollTop = term.scrollHeight;
+                    return;
+                }
+                replace = false;
+            }
+            const last = term.lastElementChild;
+            if (replace && last && !last.dataset.bar) {
+                last.innerText = text;
+                if (extraClass) last.className = `terminal-line ${extraClass}`;
             } else {
                 const div = document.createElement('div');
                 div.className = extraClass ? `terminal-line ${extraClass}` : 'terminal-line';
                 div.innerText = text;
+                if (label) div.dataset.bar = label;
                 term.appendChild(div);
             }
             term.scrollTop = term.scrollHeight;
@@ -959,6 +1040,8 @@
                                         }
 
                                         appendTerminal(successMsg, false, msgClass);
+                                    } else if (scriptName === 'train' && msg.code === 2) {
+                                        appendTerminal("\n[SYSTEM] ✗ Training could not be run: create the Pre-Cache first. / No se ha podido realizar el entrenamiento: primero crea la Pre-Caché.", false, 'term-danger');
                                     } else {
                                         appendTerminal(`\n[SYSTEM] ⚠ Process finished with code / Proceso finalizado con código: ${msg.code}`, false, 'term-danger');
                                     }
@@ -982,7 +1065,13 @@
         }
 
         async function runTrain() {
-            await saveTrainSettings();
+            const data = await saveTrainSettings();
+            if (data && data.encoding) {
+                // El trainer arrancaría con el prompt anterior: se lanza solo al terminar la codificación.
+                startAfterEncoding = true;
+                appendTerminal('\n[SYSTEM] Training will start when the preview prompt is encoded / El entrenamiento empezará cuando se codifique el prompt de la preview.');
+                return;
+            }
             startScript('train');
         }
 
@@ -1022,10 +1111,46 @@
             }
         }
 
+        // Mientras el servidor codifica el prompt de la preview no se puede lanzar ni detener nada.
+        let isRunning = false, encodingStage = null, startAfterEncoding = false;
+        const ENCODING_TEXT = {
+            loading: d => `⏳ Loading text encoder on ${d}... / Cargando text encoder en ${d}...`,
+            prompt: d => `⏳ Encoding custom prompt on ${d}... / Codificando custom prompt en ${d}...`
+        };
+
+        function applyButtonState() {
+            const encoding = encodingStage !== null;
+            document.getElementById('btn-caption').disabled = isRunning || encoding;
+            document.getElementById('btn-precache').disabled = isRunning || encoding;
+            document.getElementById('btn-train').disabled = isRunning || encoding;
+            document.getElementById('btn-stop').disabled = !isRunning || encoding;
+        }
+
+        function setEncodingState(stage, device) {
+            const wasEncoding = encodingStage !== null;
+            encodingStage = stage || null;
+            const box = document.getElementById('encode-status');
+            box.style.display = encodingStage ? 'block' : 'none';
+            box.innerText = encodingStage ? ENCODING_TEXT[encodingStage](device) : '';
+            applyButtonState();
+            if (wasEncoding && !encodingStage && startAfterEncoding) {
+                startAfterEncoding = false;
+                startScript('train');
+            }
+        }
+
+        async function pollEncoding() {
+            try {
+                const res = await fetch('/api/status?_=' + Date.now());
+                const data = await res.json();
+                setEncodingState(data.encoding, data.encoding_device);
+            } catch (e) {}
+        }
+        setInterval(pollEncoding, 2000);
+
         function setRunningState(running) {
-            document.getElementById('btn-precache').disabled = running;
-            document.getElementById('btn-train').disabled = running;
-            document.getElementById('btn-stop').disabled = !running;
+            isRunning = running;
+            applyButtonState();
             
             const badge = document.getElementById('status-badge');
             if (running) {
@@ -1039,13 +1164,21 @@
 
         async function loadDatasetInfo() {
             try {
-                const res = await fetch('/api/dataset-info');
+                // Sin cache-busting el navegador puede servir la respuesta anterior y Refresh no refresca.
+                const res = await fetch('/api/dataset-info?_=' + Date.now());
                 const data = await res.json();
                 allDatasetImages = data.images || [];
                 document.getElementById('ds-count').innerText = data.image_count;
                 document.getElementById('ds-txt-count').innerText = data.caption_count;
+                document.getElementById('btn-caption-label').innerText = data.caption_count > 0
+                    ? 'Redo Captions / Rehacer Captions' : 'Create Captions / Crear Captions';
                 renderDatasetGrid(allDatasetImages);
             } catch (e) {}
+        }
+
+        // El mtime en la URL hace que una imagen reemplazada en su sitio no salga de la caché del navegador.
+        function mediaUrl(img) {
+            return '/api/dataset-image/' + encodeURIComponent(img.file) + (img.mtime ? '?v=' + img.mtime : '');
         }
 
         function renderDatasetGrid(images) {
@@ -1054,22 +1187,118 @@
             images.forEach(img => {
                 const card = document.createElement('div');
                 card.className = 'ds-card';
-                card.onclick = () => openModal(`/api/dataset-image/${img.file}`, img.file, img.caption || '');
-                
+                card.onclick = (ev) => {
+                    if (ev.target.closest('.ds-del')) return;
+                    openModal(mediaUrl(img), img.file, img.caption || '');
+                };
+
                 const hasCaption = img.has_txt && img.caption && img.caption.trim().length > 0;
                 const dotClass = hasCaption ? 'caption-dot dot-green' : 'caption-dot dot-red';
                 const dotTitle = hasCaption ? 'Caption OK / Texto existente' : 'No Caption / Sin texto';
 
                 card.innerHTML = `
                     <div class="img-wrapper">
-                        <img src="/api/dataset-image/${img.file}" alt="${img.file}">
+                        <img src="${mediaUrl(img)}" alt="${img.file}">
+                        <button type="button" class="ds-del" title="Remove from dataset / Eliminar del dataset">&#128465;</button>
                         <span class="${dotClass}" title="${dotTitle}"></span>
                         <div class="img-filename-tag">${img.file}</div>
                     </div>
                     <div class="caption">${img.caption || '<em>No .txt caption / Sin texto</em>'}</div>
                 `;
+                card.querySelector('.ds-del').onclick = (ev) => { ev.stopPropagation(); deleteDatasetImage(img.file); };
                 grid.appendChild(card);
             });
+        }
+
+        async function deleteDatasetImage(file) {
+            if (!confirm(`Remove "${file}" and its .txt caption from the dataset?\n¿Eliminar "${file}" y su caption .txt del dataset?\n\nThe files are deleted from disk. / Los ficheros se borran del disco.`)) return;
+            try {
+                const res = await fetch('/api/delete-dataset-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file: file })
+                });
+                const data = await res.json();
+                if (data.status !== 'ok') { alert('Error: ' + (data.error || 'unknown')); return; }
+                loadDatasetInfo();
+            } catch (e) { alert('Error: ' + e); }
+        }
+
+        async function clearAllCaptions() {
+            const n = parseInt(document.getElementById('ds-txt-count').innerText) || 0;
+            if (!n) {
+                alert('There are no captions to delete. / No hay captions que borrar.');
+                return;
+            }
+            // Se pide escribir el número: un confirm normal se acepta por reflejo y esto no tiene deshacer.
+            const resp = prompt(`This DELETES the .txt of all ${n} captions. There is no undo.\nEsto BORRA el .txt de los ${n} captions. No hay deshacer.\n\nType ${n} to confirm / Escribe ${n} para confirmar:`);
+            if (String(resp || '').trim() !== String(n)) return;
+            try {
+                const res = await fetch('/api/clear-captions', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'error') { alert('Error: ' + (data.error || 'unknown')); return; }
+                appendTerminal(`[CAPTIONS] ${data.removed || 0} .txt deleted / borrados`, false, 'term-warning');
+                (data.errors || []).forEach(x => appendTerminal('   ' + x, false, 'term-danger'));
+                loadDatasetInfo();
+            } catch (e) { alert('Error: ' + e); }
+        }
+
+        async function deleteProjectData(target) {
+            const texts = {
+                precache: 'This will delete the current pre-cache.\n\nEsto borrará la pre-caché actual.',
+                training: 'This will delete all the current training (checkpoints, resume point and previews).\n\nEsto eliminará todo el entrenamiento actual (checkpoints, punto de reanudación y previews).'
+            };
+            if (!confirm(texts[target] + '\n\nContinue? / ¿Continuar?')) return;
+            try {
+                const res = await fetch('/api/delete-project-data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target: target })
+                });
+                const data = await res.json();
+                if (data.status === 'error') { alert('Error: ' + (data.error || 'unknown')); return; }
+                let out = `${data.removed} item(s) deleted / elemento(s) borrado(s)\n${data.path}`;
+                if (data.errors && data.errors.length) out += '\n\nCould not delete / No se pudo borrar:\n' + data.errors.join('\n');
+                alert(out);
+                if (target === 'training') { checkCheckpointInfo(); loadPreviews(); }
+            } catch (e) { alert('Error: ' + e); }
+        }
+
+        // Mismo prompt por defecto que 0_caption_krea2.py; se guarda en caption_settings.json al ejecutar.
+        const DEFAULT_CAPTION_PROMPT = 'Describe this image for training a text-to-image model, in at most 150 words. '
+            + 'One single paragraph of plain prose, no lists and no preamble. Cover the main subject and what they are doing, '
+            + 'their appearance, hair and clothing, the pose, the framing and camera angle, the setting and background, '
+            + 'the lighting and the colors. Do not invent a name and do not mention that this is an image or a photo.';
+
+        async function loadCaptionSettings() {
+            let data = {};
+            try {
+                data = await (await fetch('/api/caption-settings')).json();
+            } catch (e) {}
+            document.getElementById('caption_prompt_text').value = data.caption_prompt || DEFAULT_CAPTION_PROMPT;
+            if (data.overwrite !== undefined) document.getElementById('caption_overwrite').checked = !!data.overwrite;
+        }
+        loadCaptionSettings();
+
+        async function runCaption() {
+            const captioned = parseInt(document.getElementById('ds-txt-count').innerText) || 0;
+            const overwrite = document.getElementById('caption_overwrite').checked;
+            if (captioned > 0 && overwrite) {
+                if (!confirm(`This will OVERWRITE the ${captioned} caption(s) that already exist.\n\nEsto SOBRESCRIBIRÁ los ${captioned} caption(s) que ya existen.\n\nContinue? / ¿Continuar?`)) return;
+            }
+            // El captioner lee la carpeta del dataset y la palabra clave de pre_cache_settings.json.
+            await savePrecacheSettings();
+            try {
+                await fetch('/api/save-caption-settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        caption_prompt: document.getElementById('caption_prompt_text').value.trim(),
+                        overwrite: overwrite
+                    })
+                });
+            } catch (e) { alert('Error: ' + e); return; }
+            startScript('caption');
         }
 
         function filterDatasetGrid() {
@@ -1101,18 +1330,48 @@
         }
 
         async function addTriggerToAllCaptions() {
-            const trigger = document.getElementById('trigger_word').value;
-            if (!trigger) {
-                alert('Please enter a Trigger Word first / Por favor ingresa una palabra clave primero.');
+            const trigger = document.getElementById('trigger_word').value.trim();
+            const common = document.getElementById('ds-common-caption').value.trim();
+            const mode = document.getElementById('ds-common-mode').value;
+            if (!trigger && !common) {
+                alert('Enter a Trigger Word, a common text, or both. / Escribe una palabra clave, un texto común, o ambos.');
                 return;
             }
-            if (confirm(`Add trigger "${trigger}" to all dataset captions? / ¿Añadir palabra clave a todos los captions?`)) {
-                await fetch('/api/batch-caption', {
-                    method: 'POST',
-                    body: JSON.stringify({ trigger_word: trigger })
-                });
-                loadDatasetInfo();
+
+            let msg;
+            if (!common) {
+                msg = `Add trigger "${trigger}" to all dataset captions? / ¿Añadir la palabra clave a todos los captions?`;
+            } else if (mode === 'replace') {
+                msg = `REPLACE every caption with:
+
+    ${trigger ? trigger + ', ' : ''}${common}
+
+REEMPLAZAR todos los captions por ese texto. Lo que hubiera escrito se pierde.`;
+            } else if (mode === 'remove') {
+                msg = `REMOVE this text from every caption, keeping the rest:
+
+    ${common}
+
+QUITAR ese texto de todos los captions, conservando el resto.`;
+            } else {
+                msg = `APPEND this text at the end of every caption:
+
+    ${common}
+
+AÑADIR ese texto al final de cada caption. Lo que ya estaba escrito se conserva.`;
             }
+            if (!confirm(msg)) return;
+
+            try {
+                const res = await fetch('/api/batch-caption', {
+                    method: 'POST',
+                    body: JSON.stringify({ trigger_word: trigger, common: common, mode: mode })
+                });
+                const data = await res.json();
+                if (data.status !== 'ok') { alert('Error: ' + (data.error || 'unknown')); return; }
+                appendTerminal(`[CAPTIONS] ${data.updated_count || 0} caption(s) updated / actualizados`, false, 'term-success');
+                loadDatasetInfo();
+            } catch (e) { alert('Error: ' + e); }
         }
 
         async function loadPreviews() {
@@ -1143,17 +1402,82 @@
         setInterval(loadPreviews, 8000);
         loadPreviews();
 
+        // Texto del caption tal como se abrió, para saber si se ha editado.
+        let captionAtOpen = '';
+
         function openModal(imgSrc, filename, text) {
             currentEditingFilename = filename;
+            captionAtOpen = text;
             document.getElementById('modal-filename').innerText = filename;
             document.getElementById('modal-img').src = imgSrc;
             document.getElementById('modal-txt').value = text;
             document.getElementById('modal').classList.add('active');
         }
 
-        function closeModal(e) {
+        // El click se dispara al SOLTAR: seleccionar texto del caption y soltar fuera cerraba el modal.
+        // Solo se cierra si la pulsación empezó en el fondo.
+        let modalPressedOnBackdrop = false;
+
+        function modalOverlayDown(e) {
+            modalPressedOnBackdrop = (e.target === e.currentTarget);
+        }
+
+        function modalOverlayClick(e) {
+            if (e.target !== e.currentTarget || !modalPressedOnBackdrop) return;
+            closeModal();
+        }
+
+        function closeModal(force) {
+            if (force !== true && document.getElementById('modal-txt').value !== captionAtOpen
+                    && !confirm('The caption has unsaved changes. Close and lose them?\n\nEl caption tiene cambios sin guardar. ¿Cerrar y perderlos?')) {
+                return;
+            }
             document.getElementById('modal').classList.remove('active');
         }
+
+        const DS_GRID_MIN = 380;
+        const DS_GRID_STORE = 'ds_grid_height';
+
+        function applyDsGridHeight(px) {
+            const grid = document.getElementById('ds-grid');
+            const alto = Math.min(Math.max(DS_GRID_MIN, Math.round(window.innerHeight * 0.85)), Math.max(DS_GRID_MIN, Math.round(px)));
+            grid.style.maxHeight = alto + 'px';
+        }
+
+        (function initDsResizer() {
+            const handle = document.getElementById('ds-resizer');
+            const grid = document.getElementById('ds-grid');
+            // Un localStorage bloqueado (ventana privada) no debe impedir dibujar la rejilla.
+            try {
+                const saved = parseInt(localStorage.getItem(DS_GRID_STORE), 10);
+                if (saved > 0) applyDsGridHeight(saved);
+            } catch (e) {}
+
+            let startY = 0, startH = 0;
+            handle.addEventListener('pointerdown', ev => {
+                ev.preventDefault();
+                startY = ev.clientY;
+                startH = grid.getBoundingClientRect().height;
+                handle.classList.add('dragging');
+                handle.setPointerCapture(ev.pointerId);
+            });
+            handle.addEventListener('pointermove', ev => {
+                if (handle.classList.contains('dragging')) applyDsGridHeight(startH + (ev.clientY - startY));
+            });
+            const release = ev => {
+                if (!handle.classList.contains('dragging')) return;
+                handle.classList.remove('dragging');
+                try { handle.releasePointerCapture(ev.pointerId); } catch (e) {}
+                try { localStorage.setItem(DS_GRID_STORE, String(Math.round(grid.getBoundingClientRect().height))); } catch (e) {}
+            };
+            handle.addEventListener('pointerup', release);
+            handle.addEventListener('pointercancel', release);
+            handle.addEventListener('dblclick', () => {
+                applyDsGridHeight(DS_GRID_MIN);
+                try { localStorage.removeItem(DS_GRID_STORE); } catch (e) {}
+            });
+            window.addEventListener('resize', () => applyDsGridHeight(grid.getBoundingClientRect().height));
+        })();
 
         async function saveCurrentCaption() {
             const newCaption = document.getElementById('modal-txt').value;
@@ -1164,7 +1488,7 @@
             const data = await res.json();
             if (data.status === 'ok') {
                 alert('✓ Caption saved / Caption guardado!');
-                closeModal();
+                closeModal(true);
                 loadDatasetInfo();
             }
         }
@@ -1217,7 +1541,7 @@
         function confirmFolderSelection() {
             if (currentBrowserTarget === 'dataset') {
                 document.getElementById('dataset_path').value = browserPath;
-                loadDatasetInfo();
+                datasetPathChanged();
             } else if (currentBrowserTarget === 'export') {
                 document.getElementById('export_models_dir').value = browserPath;
             }
