@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> ## ➡️ This project continues in [AcademiaSD LoRAlab Trainer Studio](https://github.com/AcademiaSD/AcademiaSD_LoRAlab-TrainerStudio)
+> All the AcademiaSD LoRAlab trainers — **Qwen-Image 2.1, Krea 2, LTX-2.3 and MiniMax-H3** — in **one installation** with one launcher, smaller model downloads and new trainers as they come out. **This repository is no longer updated.**
+> Moving over? Copy this trainer's model folder into Trainer Studio and it will not be downloaded again.
+>
+> ## ➡️ Este proyecto continúa en [AcademiaSD LoRAlab Trainer Studio](https://github.com/AcademiaSD/AcademiaSD_LoRAlab-TrainerStudio)
+> Todos los entrenadores LoRAlab de AcademiaSD — **Qwen-Image 2.1, Krea 2, LTX-2.3 y MiniMax-H3** — en **una sola instalación** con un lanzador común, descargas de modelos más pequeñas y los nuevos entrenadores según vayan saliendo. **Este repositorio ya no se actualiza.**
+> ¿Te cambias? Copia la carpeta del modelo de este entrenador dentro de Trainer Studio y no tendrás que volver a descargarlo.
 
 # AcademiaSD Krea2 LoRAlab Beta v0.93
 
